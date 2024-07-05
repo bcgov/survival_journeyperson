@@ -98,10 +98,8 @@ Column
     
 ```{r, fig.retina=2}
 renderPlot({
-plt <- at_risk_plus_forecast|>
-  filter(trade_desc==input$trade)|>
-  pull(plot)
-plt[[1]]
+  req(input$trade)
+  at_risk_plus_forecast$plot[at_risk_plus_forecast$trade_desc==input$trade]
 })
 ```
     
@@ -109,12 +107,11 @@ plt[[1]]
 
 ```{r, fig.retina=2}
 renderPlot({
-plt <- survival|>
-  filter(trade_desc==input$trade)|>
-  mutate(km_split_plot = pmap(list(km_split_model, data, trade_desc), my_survplot))|>
-  ungroup()|>
-  select(km_split_plot)
-plt[[1]]
+  req(input$trade)
+  plt <- survival|>
+    filter(trade_desc==input$trade)|>
+    mutate(km_split_plot = pmap(list(km_split_model, data, trade_desc), my_survplot))
+  plt$km_split_plot
 })
 ```
 
@@ -125,10 +122,8 @@ Column
 
 ```{r, fig.retina=2}
 renderPlot({
-plt <- observed_vs_backcast|>
-  filter(trade_desc==input$trade)|>
-  pull(plot)
-plt[[1]]
+  req(input$trade)
+  observed_vs_backcast$plot[observed_vs_backcast$trade_desc==input$trade]
 })
 ```
 
@@ -136,10 +131,8 @@ plt[[1]]
     
 ```{r, fig.retina=2}
 renderPlot({
-plt <- actual_plus_forecast|>
-  filter(trade_desc==input$trade)|>
-  pull(plot)
-plt[[1]]
+  req(input$trade)
+  actual_plus_forecast$plot[actual_plus_forecast$trade_desc==input$trade]
 })
 ```
     
