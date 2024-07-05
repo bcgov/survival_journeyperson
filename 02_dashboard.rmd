@@ -1,0 +1,153 @@
+---
+title: "Survival Analysis of Apprenticeship Completions"
+output: flexdashboard::flex_dashboard
+runtime: shiny
+resource_files:
+- out/actual_plus_forecast.rds
+- out/at_risk_plus_forecast.rds
+- out/diagnosis.csv
+- out/observed_vs_backcast.rds
+- out/survival.rds
+---
+
+```{r}
+library(tidyverse)
+library(here)
+library(conflicted)
+library(plotly)
+conflicts_prefer(dplyr::filter)
+font_size=18
+my_survplot <- function(mod, dat, grp) {
+  plt <- survminer::ggsurvplot(mod,
+    dat,
+    censor = FALSE,
+    conf.int = FALSE,
+    ggtheme = theme_grey(),
+    font.title=font_size,
+    font.x=font_size,
+    font.y=font_size,
+    font.tickslab=font_size,
+    font.legend=font_size
+  ) +
+    labs(
+      title = grp,
+      x = "Months",
+      y = ""
+    )
+}
+my_dt <- function(tbbl) {
+  DT::datatable(tbbl,
+                filter = 'top',
+                extensions = "Buttons",
+                rownames = FALSE,
+                options = list(
+                  columnDefs = list(list(className = "dt-center", targets = "_all")),
+                  paging = TRUE,
+                  scrollX = TRUE,
+                  scrollY = TRUE,
+                  searching = TRUE,
+                  ordering = TRUE,
+                  dom = "Btip",
+                  buttons = list(
+                    list(extend = "csv", filename = "some_file_name"),
+                    list(extend = "excel", filename = "some_file_name")
+                  ),
+                  pageLength = 20
+                )
+  )
+}
+
+survival <- read_rds(here("out","survival.rds"))
+observed_vs_backcast <- read_rds(here("out","observed_vs_backcast.rds"))
+at_risk_plus_forecast <- read_rds(here("out","at_risk_plus_forecast.rds"))
+actual_plus_forecast <- read_rds(here("out","actual_plus_forecast.rds"))
+diagnosis <- read_csv(here("out","diagnosis.csv"))
+```
+
+The forecasts
+=====================================  
+
+Inputs {.sidebar data-width=400}
+-------------------------------------
+
+### Introduction:
+
+* Registration for apprenticeship is a leading indicator of completion of apprenticeship.
+* In this app we use survival analysis to uncover the dynamics governing the transition between registering for an apprenticeship and completion of apprenticeship: i.e. not everyone who registers completes, and the elapsed time between registration and completion varies across trade and time. 
+* Specifically, we forecast the arrival rate of new registrants using exponential smoothing, and then apply the joint probabilities of completion to the arrival rate to get the expected number of completions.
+
+### What makes a good forecast:
+
+1) A reasonable forecast of arrivals (the rate of arrival of new registrants is predictable)
+2) Survival curves that are stable over time: here we split the 24 years of completion data into 3 eras of 8 years each, in order to ascertain whether the transition dynamics are stable.
+3) Backcasts (applying the transition probabilities to historic new registrant arrival data) are close the observed values of completions.
+
+```{r}
+selectInput(
+  "trade",
+  "Choose a trade:",
+  sort(survival$trade_desc),
+  sort(survival$trade_desc)[1] 
+)
+```
+
+Column
+-------------------------------------
+    
+### Arrival rate of new apprentice registrations
+    
+```{r, fig.retina=2}
+renderPlot({
+plt <- at_risk_plus_forecast|>
+  filter(trade_desc==input$trade)|>
+  pull(plot)
+plt[[1]]
+})
+```
+    
+### Survival Curves
+
+```{r, fig.retina=2}
+renderPlot({
+plt <- survival|>
+  filter(trade_desc==input$trade)|>
+  mutate(km_split_plot = pmap(list(km_split_model, data, trade_desc), my_survplot))|>
+  ungroup()|>
+  select(km_split_plot)
+plt[[1]]
+})
+```
+
+Column
+-------------------------------------
+
+### Observed vs. Backcasts
+
+```{r, fig.retina=2}
+renderPlot({
+plt <- observed_vs_backcast|>
+  filter(trade_desc==input$trade)|>
+  pull(plot)
+plt[[1]]
+})
+```
+
+### Forecasts of Apprentice Completions
+    
+```{r, fig.retina=2}
+renderPlot({
+plt <- actual_plus_forecast|>
+  filter(trade_desc==input$trade)|>
+  pull(plot)
+plt[[1]]
+})
+```
+    
+Diagnosis
+=====================================  
+
+```{r}
+my_dt(diagnosis)
+```
+
+
