@@ -61,11 +61,8 @@ survival <- read_rds(here("out","survival.rds"))
 observed_vs_backcast <- read_rds(here("out","observed_vs_backcast.rds"))
 at_risk_plus_forecast <- read_rds(here("out","at_risk_plus_forecast.rds"))
 actual_plus_forecast <- read_rds(here("out","actual_plus_forecast.rds"))
-diagnosis <- read_csv(here("out","diagnosis.csv"))
 ```
 
-The forecasts
-=====================================  
 
 Inputs {.sidebar data-width=400}
 -------------------------------------
@@ -135,12 +132,4 @@ renderPlot({
   actual_plus_forecast$plot[actual_plus_forecast$trade_desc==input$trade]
 })
 ```
-    
-Diagnosis
-=====================================  
-
-```{r}
-my_dt(diagnosis)
-```
-
 

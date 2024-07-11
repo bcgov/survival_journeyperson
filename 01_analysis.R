@@ -1,4 +1,4 @@
-#' This script produces a 5 year forecast for apprenticeship completion using survival analysis.
+#' This script produces a 5 year forecast for STC apprenticeship completion using survival analysis.
 #' Using the terminology of survival analysis, an individual who registers for apprenticeship is "at risk"
 #' of completing their apprenticeship a.k.a. "Death".
 #'
@@ -25,8 +25,9 @@ library(fpp3)
 library(patchwork)
 library(conflicted)
 conflicts_prefer(dplyr::filter)
-fcast_horizon=60
+fcast_horizon=120
 font_size=18
+fcast_range=2023:2033
 
 complete_wrapper <- function(surv_dat, at_risk) {#at_risk is the historical+ets forecast of new registrations tibble
   complete <- function(start_date, new_regs) {
@@ -97,6 +98,10 @@ obs_vs_back_plot <- function(tbbl, name){
 }
 
 # get the data, clean it up-----------------------------------
+
+stc<- read_csv(here("out","stc_trade_noc_mapping.csv"))|>
+  select(trade_desc=Trade)
+
 reg_and_complete <- read_excel(here("data", "Completion App Data.xlsx"),
                                sheet = "Sheet1",
                                na = "NULL") |>
@@ -109,6 +114,7 @@ reg_and_complete <- read_excel(here("data", "Completion App Data.xlsx"),
     completed = if_else(is.na(end_date), 0, 1),
     time = if_else(is.na(end_date), last_observed - start_date, end_date - start_date)
   ) |>
+  semi_join(stc)|>
   filter(end_date > start_date | is.na(end_date)) # sanity check: cant end before you start
 #the historical time series of completions-------------------------------
 observed_complete <- reg_and_complete |>
@@ -127,8 +133,6 @@ survival <- reg_and_complete |>
     km_model = map(data, survfit_constant),
     km_split_model = map(data, survfit_split),
     surv_dat = map(km_model, get_joint),
-#   km_plot = pmap(list(km_model, data, trade_desc), my_survplot),
-#   km_split_plot = pmap(list(km_split_model, data, trade_desc), my_survplot),
     km_prob_complete = map_dbl(surv_dat, function(x) 1-min(x$surv))
   )|>
   arrange(km_prob_complete)
@@ -139,12 +143,12 @@ observed_at_risk <- reg_and_complete |>
   group_by(start_date, trade_desc) |>
   summarize(new_regs = n()) |>
   as_tsibble(key = trade_desc, index = start_date) |>
-  fill_gaps() |>
+  fill_gaps(.full=TRUE)|>
   mutate(new_regs = if_else(is.na(new_regs), 0, new_regs))|>
   tibble()|>
   group_by(trade_desc)|>
   mutate(max_start=max(start_date))|>
-  filter(ym(max_start) > today()-years(1))|> #at least one person has registered in last year
+#  filter(ym(max_start) > today()-years(1))|> #at least one person has registered in last year
   select(-max_start)|>
   as_tsibble(key = trade_desc, index = start_date)
 
@@ -189,7 +193,6 @@ actual_plus_forecast <- observed_complete|>
   nest()|>
   mutate(plot=map2(data, trade_desc, fcast_plot, "Monthly Apprentice Completions"))
 
-
 #plot using ets_fcast and at risk (bind them together nest them, then map plotting function)---------------
 
 at_risk_plus_forecast <- ets_fcast |>
@@ -221,7 +224,6 @@ observed_vs_backcast <- observed_complete|>
 #write data to disk---------------------------
 
 survival|>
-  semi_join(observed_vs_backcast, by ="trade_desc")|>
   select(trade_desc, km_split_model, data)|>
   write_rds(here("out","survival.rds"))
 
@@ -237,3 +239,11 @@ actual_plus_forecast|>
   select(-data)|>
   write_rds(here("out","actual_plus_forecast.rds"))
 
+actual_plus_forecast|>
+  select(-plot)|>
+  unnest(data)|>
+  mutate(year=year(date))|>
+  group_by(trade_desc, year)|>
+  summarize(apprentice_completion_fcast=round(sum(value)))|>
+  filter(year %in% fcast_range)|>
+  write_csv(here("out","annual_apprentice_completion_forecast.csv"))
