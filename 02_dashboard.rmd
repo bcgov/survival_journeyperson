@@ -1,13 +1,17 @@
 ---
-title: "Survival Analysis of Apprenticeship Completions"
+title: "Survival Analysis of STC (plus some other) Apprenticeship Completions"
 output: flexdashboard::flex_dashboard
 runtime: shiny
 resource_files:
 - out/actual_plus_forecast.rds
-- out/at_risk_plus_forecast.rds
+- out/at_risk_plots.rds
 - out/diagnosis.csv
 - out/observed_vs_backcast.rds
 - out/survival.rds
+- out/dates.rds
+- out/completions_vs_demand.rds
+- out/new_regs_vs_demand.rds
+- out/trade_noc_mapping.csv
 ---
 
 ```{r}
@@ -15,11 +19,14 @@ library(tidyverse)
 library(here)
 library(conflicted)
 library(plotly)
+library(formattable)
 conflicts_prefer(dplyr::filter)
+conflicts_prefer(formattable::style)
 font_size=18
 my_survplot <- function(mod, dat, grp) {
   plt <- survminer::ggsurvplot(mod,
     dat,
+    pval = TRUE,
     censor = FALSE,
     conf.int = FALSE,
     ggtheme = theme_grey(),
@@ -31,8 +38,8 @@ my_survplot <- function(mod, dat, grp) {
   ) +
     labs(
       title = grp,
-      x = "Months",
-      y = ""
+      x = "Months since Registration",
+      y = "Survival Probability"
     )
 }
 my_dt <- function(tbbl) {
@@ -59,10 +66,71 @@ my_dt <- function(tbbl) {
 
 survival <- read_rds(here("out","survival.rds"))
 observed_vs_backcast <- read_rds(here("out","observed_vs_backcast.rds"))
-at_risk_plus_forecast <- read_rds(here("out","at_risk_plus_forecast.rds"))
+at_risk_plus_forecast <- read_rds(here("out","at_risk_plots.rds"))
 actual_plus_forecast <- read_rds(here("out","actual_plus_forecast.rds"))
+dates <- read_rds(here("out","dates.rds"))
+completions_vs_demand <-  read_rds(here("out","completions_vs_demand.rds"))
+new_regs_vs_demand <-  read_rds(here("out","new_regs_vs_demand.rds"))
+
 ```
 
+Thumbs and Eyes
+=======================================================
+
+Inputs {.sidebar data-width=400}
+-------------------------------------
+
+* This initial page gives a broad overview of whether or not there will be enough new journeypersons and apprentices to meet demand.
+* A green thumbs up indicates there will likely be a surplus.
+* A red thumbs down indicates there will likely be a shortage.
+* An orange eye indicates we should probably keep an eye on the situation. 
+* More details on the methodology can be found in the other tabs.
+
+Column
+---------------------------------------------------------------------
+
+```{r}
+jp_risk <- completions_vs_demand|>
+  group_by(NOC_Code_2021, NOC_2021, series)|>
+  summarize(value=sum(value))|>
+  pivot_wider(names_from = series, values_from = value)|>
+  mutate(`Journeyperson Demand over Supply Ratio`=demand/supply)|>
+  select(NOC_2021,`Journeyperson Demand over Supply Ratio`)
+  
+ap_risk <- new_regs_vs_demand|>
+  group_by(NOC_Code_2021, NOC_2021, series)|>
+  summarize(value=sum(value))|>
+  pivot_wider(names_from = series, values_from = value)|>
+  mutate(`Apprentice Demand over Supply Ratio`=demand/supply)|>
+  select(NOC_2021, `Apprentice Demand over Supply Ratio`)
+  
+
+risk <- full_join(jp_risk, ap_risk)
+
+formattable(risk, list(
+  `Apprentice Demand over Supply Ratio` = formatter("span",
+      style = x ~ case_when(x > 1.1 ~ "font-size:19px; color:red",
+                            x < .8 ~ "font-size:19px; color:green",
+                            TRUE ~ "font-size:19px; color:orange"),
+      x ~ icontext(case_when(
+         x  > 1.1 ~ "thumbs-down",
+        x < .8 ~ "thumbs-up",
+        TRUE ~ "eye-open"))),
+  `Journeyperson Demand over Supply Ratio` = formatter("span",
+       style = x ~ case_when(x > 1.1 ~ "font-size:19px; color:red",
+                            x < .8 ~ "font-size:19px; color:green",
+                            TRUE ~ "font-size:19px; color:orange"),
+      x ~ icontext(case_when(
+         x  > 1.1 ~ "thumbs-down",
+        x < .8 ~ "thumbs-up",
+        TRUE ~ "eye-open")))
+  ))
+```
+
+
+
+Forecast of Apprentice Completions
+=========================================================
 
 Inputs {.sidebar data-width=400}
 -------------------------------------
@@ -94,9 +162,20 @@ Column
 ### Arrival rate of new apprentice registrations
     
 ```{r, fig.retina=2}
-renderPlot({
+renderPlotly({
   req(input$trade)
-  at_risk_plus_forecast$plot[at_risk_plus_forecast$trade_desc==input$trade]
+  plt <- at_risk_plus_forecast$plot[at_risk_plus_forecast$trade_desc==input$trade][[1]]
+  plot <- plotly::ggplotly(plt)
+  plot[['x']][['layout']][['shapes']] <- list(
+    list(type = "rect",
+         fillcolor = "black", line = list(color = "black"), opacity = 0.1,
+         x0 = dates$x0, 
+         x1 = dates$x1, 
+         xref = "x",
+         y0 = 0, 
+         y1 = 1000, 
+         yref = "y"))
+  return(plot)
 })
 ```
     
@@ -118,18 +197,101 @@ Column
 ### Observed vs. Backcasts
 
 ```{r, fig.retina=2}
-renderPlot({
+renderPlotly({
   req(input$trade)
-  observed_vs_backcast$plot[observed_vs_backcast$trade_desc==input$trade]
+  observed_vs_backcast$plot[observed_vs_backcast$trade_desc==input$trade][[1]]
 })
 ```
 
 ### Forecasts of Apprentice Completions
     
 ```{r, fig.retina=2}
-renderPlot({
+renderPlotly({
   req(input$trade)
-  actual_plus_forecast$plot[actual_plus_forecast$trade_desc==input$trade]
+  plt <- actual_plus_forecast$plot[actual_plus_forecast$trade_desc==input$trade][[1]]
+  plot <- plotly::ggplotly(plt)
+  plot[['x']][['layout']][['shapes']] <- list(
+    list(type = "rect",
+         fillcolor = "black", line = list(color = "black"), opacity = 0.1,
+         x0 = dates$x0, 
+         x1 = dates$x1, 
+         xref = "x",
+         y0 = 0, 
+         y1 = 2000, 
+         yref = "y"))
+  return(plot)
 })
+```
+
+Apprentice Completions vs. Job Openings
+================================================================
+
+Inputs {.sidebar data-width=250}
+-------------------------------------
+
+### Are we producing enough journeypersons to meet demand?
+
+* Supply of Journeypersons is the forecast of apprentice completions.
+* Demand for journeypersons is assumed to be twice LMO replacement demand plus 1/3 of LMO expansion demand.
+* Regarding replacement demand, we assume that for every retirement or death there is another journeyperson that leaves the trade prematurely.
+* Regarding expansion demand, the desired ratio of journeyperson to apprentice is 1:2.
+* Note that there is a many-to-one relationship between trades and occupations. 
+
+
+Column
+------------------------------------------------
+
+### Supply vs. Demand of Journeypersons
+
+```{r}
+plt <- completions_vs_demand|>
+  mutate(NOC_2021=str_trunc(NOC_2021, width=30))|>
+  ggplot(aes(year, value, colour=series))+
+  geom_line()+
+  scale_x_continuous(breaks=seq(2022,2034,2))+
+  scale_y_continuous(trans="log10", labels = scales::comma)+
+  labs(x=NULL,y=NULL)+
+  facet_wrap(~NOC_2021, nrow = 3)
+
+plotly::ggplotly(plt)|>
+  plotly::layout(legend = list(orientation = 'h', x = 0.45, y = 1.1))
+```
+
+New Apprentice Registrations vs. Job Openings
+================================================================
+
+Inputs {.sidebar data-width=250}
+-------------------------------------
+
+### Are there enough new apprentices to meet demand?
+
+* Supply of apprentices is the forecast of new registrations. 
+* The demand for apprentices is assumed to be twice that of new journeypersons: the desired ratio is 2:1.
+* Note that there is a many-to-one relationship between trades and occupations. 
+
+Column
+------------------------------------------------
+
+### Supply vs. Demand of New Apprentices
+
+```{r}
+plt <- new_regs_vs_demand|>
+  mutate(NOC_2021=str_trunc(NOC_2021, width=30))|>
+  ggplot(aes(year, value, colour=series))+
+  geom_line()+
+  scale_x_continuous(breaks=seq(2022,2034,2))+
+  scale_y_continuous(trans="log10", labels = scales::comma)+
+  labs(x=NULL,y=NULL)+
+  facet_wrap(~NOC_2021, nrow = 3)
+
+plotly::ggplotly(plt)|>
+  plotly::layout(legend = list(orientation = 'h', x = 0.45, y = 1.1))
+```
+
+Trades and occupations
+========================================================
+
+```{r}
+my_dt(read_csv(here("out", "trade_noc_mapping.csv")))
 ```
 

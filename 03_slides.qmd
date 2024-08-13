@@ -1,0 +1,170 @@
+---
+title: "Forecasting Apprentice Completions"
+author: "Richard Martin"
+format: revealjs
+---
+
+```{r}
+library(tidyverse)
+library(tsibble)
+library(conflicted)
+library(patchwork)
+library(here)
+conflicts_prefer(dplyr::filter)
+font_size=18
+my_survplot <- function(mod, dat, grp) {
+  plt <- survminer::ggsurvplot(mod,
+    dat,
+    pval = TRUE,
+    censor = FALSE,
+    conf.int = FALSE,
+    ggtheme = theme_grey(),
+    font.title=font_size,
+    font.x=font_size,
+    font.y=font_size,
+    font.tickslab=font_size,
+    font.legend=font_size
+  ) +
+    labs(
+      title = grp,
+      x = "Months since registration",
+      y = "Survival Probability"
+    )
+}
+survival <- read_rds(here("out","survival.rds"))
+```
+
+## Introduction
+
+-   The goal is to forecast apprentice completions in BC.
+-   We could use the historic completions and standard time series forecasting techniques, but...
+
+![the road ahead might not look like the road behind](rear-view-mirror.jpg)
+
+## Apprentice registrations are a leading indicator of apprentice completions.
+
+![road signs: a leading indicator of road direction](signs.png)
+
+## A simple forecast based on registrations:
+
+-   Assume for the sake of argument that 75% of those who register complete their apprenticeship, and they all take exactly 48 months to complete.
+-   We would form our forecast by taking an observation of new registrants, adding 48 months and multiplying by .75.
+
+## A simple forecast:
+
+```{r}
+sim_dates <- seq(floor_date(today()-months(48), unit = "month"),floor_date(today(), unit = "month"), by="month")
+new_reg <- sin(seq(0,2*pi, length=length(sim_dates)))+10
+sim <- tibble(sim_dates=sim_dates, `new registrants`=new_reg)|>
+  pivot_longer(cols = `new registrants`, names_to = "series", values_to = "value")
+fcast <- sim|>
+  mutate(sim_dates=sim_dates+months(48),
+         value=.75*value,
+         series="simple completion forecast")
+ggplot(mapping=aes(sim_dates, value, colour=series))+
+  geom_line(data=sim)+
+  geom_line(data=fcast)+ 
+  annotate("segment", x = min(sim_dates), xend = min(sim_dates), y = 7.5, yend = 10, lty=2)+
+  annotate("segment", x = min(sim_dates), xend = (min(sim_dates)+months(48)), y = 7.5, yend = 7.5, lty=2)+
+  annotate("text", x = min(sim_dates)+months(5), y = 8.75, label = "-25%")+
+  annotate("text", x = min(sim_dates)+months(24), y = 7.7, label = "+48 months")
+```
+
+## Simple vs. slightly more realistic transistion probabilities.
+
+```{r}
+simple <- tibble(`completion time`="48 months", `probability of completion`=.75)
+simple_plt <- ggplot(simple, aes(`completion time`, `probability of completion`))+
+  geom_col(width = .05)+
+  labs(title="75% completion rate, all at 48 months")
+
+real <- tibble(`completion time (months)`=36:60,
+                   x=seq(-3,3, length=length(`completion time (months)`)),
+                   `probability of completion` = .75*dnorm(x)/sum(dnorm(x)))
+                   
+real_plt <- ggplot(real, aes(`completion time (months)`, `probability of completion`))+
+  geom_col()+
+  labs(title="75% completion rate, centered at 48 months.")
+
+simple_plt+real_plt
+```
+
+## A refresher on probability:
+
+-   Suppose you had a six sided (fair) die where numbers are either red or black.
+
+::: {layout-ncol="3"}
+![](Screenshot%20from%202024-08-12%2011-24-31.png)
+
+```{r}
+kableExtra::kbl(tibble(number=1:6, colour=c(rep("red",3), rep("black",3))))
+```
+
+-   What is the probability of rolling a red?
+-   Conditional on rolling a red, what is the probability of rolling a 2?
+:::
+
+## What is the *joint* probability of rolling a 2 *and* a red (with a single roll of the die)?
+
+$$P(2 \cap red)=P(2|red) \times P(red)=\frac13\times\frac12=\frac16$$
+
+## Kaplan-Meier estimation:
+
+-   yields non-parametric estimates of survival curves, which allow for derivation of transition probabilities.
+-   A transition probability is a joint probability: the probability of BOTH completion this instant AND survival thus far.
+-   The hazard rate is the instantaneous probability of completion conditional on survival thus far.
+-   The probability of survival thus far is plotted in survival curves.
+
+$$P(completion \cap survival) =P(completion~|~survival) \times P(survival) $$
+
+## Powerline Technicians
+
+```{r, fig.height=8, fig.retina=2}
+#| layout-ncol: 2
+#| column: page
+plt <- survival|>
+    filter(trade_desc=="Powerline Technician")|>
+    mutate(km_split_plot = pmap(list(km_split_model, data, trade_desc), my_survplot))
+plt$km_split_plot[[1]]
+
+joint <- survival|>
+  filter(trade_desc=="Powerline Technician")|>
+  pull(surv_dat)
+
+ggplot(joint[[1]], aes(time, joint))+
+  geom_col()+
+  labs(x="Months since registration",
+       y="Probability of completion",
+       title="Transition Probabilities")+
+  theme(text=element_text(size=font_size))
+
+```
+
+-   Splitting data into eras allows us to investigate whether or not transition dynamics are historically stable.
+
+## Plumbers:
+
+```{r, fig.height=8, fig.retina=2}
+#| layout-ncol: 2
+#| column: page
+plt <- survival|>
+    filter(trade_desc=="Plumber")|>
+    mutate(km_split_plot = pmap(list(km_split_model, data, trade_desc), my_survplot))
+plt$km_split_plot[[1]]
+
+joint <- survival|>
+  filter(trade_desc=="Plumber")|>
+  pull(surv_dat)
+
+ggplot(joint[[1]], aes(time, joint))+
+  geom_col()+
+  labs(x="Months since registration",
+       y="Probability of completion",
+       title="Transition Probabilities")+
+  theme(text=element_text(size=font_size))
+
+```
+
+## Check out my app!
+
+[apprentice completions](https://bc-psfs.shinyapps.io/survival/#section-forecast-of-apprentice-completions)

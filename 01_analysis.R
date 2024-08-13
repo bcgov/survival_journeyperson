@@ -1,4 +1,4 @@
-#' This script produces a 5 year forecast for STC apprenticeship completion using survival analysis.
+#' This script produces a 5 year forecast for STC (plus some others) apprenticeship completion using survival analysis.
 #' Using the terminology of survival analysis, an individual who registers for apprenticeship is "at risk"
 #' of completing their apprenticeship a.k.a. "Death".
 #'
@@ -25,9 +25,10 @@ library(fpp3)
 library(patchwork)
 library(conflicted)
 conflicts_prefer(dplyr::filter)
-fcast_horizon=120
-font_size=18
-fcast_range=2023:2033
+largest_trades <- 20
+fcast_horizon <- 120
+font_size <- 15
+fcast_range <- 2023:2033
 
 complete_wrapper <- function(surv_dat, at_risk) {#at_risk is the historical+ets forecast of new registrations tibble
   complete <- function(start_date, new_regs) {
@@ -57,7 +58,9 @@ survfit_constant <- function(tbbl) {
 survfit_split <- function(tbbl) {
   survfit(Surv(time, completed) ~ era, tbbl)
 }
-
+survdiff_wrapper <- function(tbbl) {
+  survdiff(Surv(time, completed) ~ era, tbbl)
+}
 get_joint <- function(mod_lst) {
   tibble(
     haz_rate = c(diff(mod_lst$cumhaz), 0),
@@ -72,15 +75,7 @@ fcast_plot <- function(tbbl, series, ylab){
     mutate(date=ym(date))|>
     ggplot(aes(date, value))+
     geom_line() +
-    scale_y_continuous(trans="log10", labels = scales::comma)+
-    annotate(
-      geom = "rect",
-      xmin = ym(reg_and_complete$last_observed[1]),
-      xmax = ym(max(f_and_b_cast$complete_date)+month(1)),
-      ymin = 0,
-      ymax = +Inf,
-      alpha = 0.4
-    ) +
+    scale_y_continuous(labels = scales::comma)+
     labs(x = NULL,
          y = ylab,
          title=series)+
@@ -88,18 +83,53 @@ fcast_plot <- function(tbbl, series, ylab){
 }
 obs_vs_back_plot <- function(tbbl, name){
   tbbl|>
-    ggplot(aes(date, value, colour=series))+
+    ggplot(aes(date, value, color=series))+
     geom_line()+
-    scale_y_continuous(trans="log10", labels = scales::comma)+
+    scale_y_continuous(labels = scales::comma)+
     labs(title=name,
          y="Annual Apprenticeship Completions",
          x=NULL)+
     theme(text=element_text(size=font_size))
 }
 
+get_closest <- function(desired_value, actual_values){
+  keep <- which.min(abs(desired_value-actual_values))
+  actual_values[keep]
+}
+
+split_data <- function(mod_list){
+  temp <- tibble(era=rep(names(mod_list[["strata"]]), times=mod_list[["strata"]]),
+         surv=mod_list[["surv"]],
+         time=mod_list[["time"]])|>
+    as_tsibble(key=era, index=time)|>
+    group_by_key() %>%
+    fill_gaps() %>%
+    tidyr::fill(surv, .direction = "down")
+}
+
+get_yearly <- function(tbbl){
+  tbbl|>
+    filter(time %in% seq(12,240,12))|>
+    mutate(years_since_registration=time/12,
+           proportion_complete=1-surv)|>
+    as_tibble()|>
+    select(era, years_since_registration, proportion_complete)
+}
+get_median <- function(tbbl){
+  tbbl|>
+    as_tibble()|>
+    group_by(era)|>
+    mutate(distance=abs(surv-.5))|>
+    slice_min(distance, n=1, with_ties = FALSE)|>
+    mutate(median_time_to_complete_in_months=if_else(distance>.1, NA_real_, time))|>
+    select(era, median_time_to_complete_in_months)
+}
+
+
 # get the data, clean it up-----------------------------------
 
-stc<- read_csv(here("out","stc_trade_noc_mapping.csv"))|>
+stc<- read_csv(here("out","trade_noc_mapping.csv"))|>
+  filter(STC_Trades=="Y")|>
   select(trade_desc=Trade)
 
 reg_and_complete <- read_excel(here("data", "Completion App Data.xlsx"),
@@ -113,9 +143,15 @@ reg_and_complete <- read_excel(here("data", "Completion App Data.xlsx"),
     last_observed = tsibble::yearmonth(max(start_date, na.rm = TRUE)), # not clear when observation ended... using this as proxy.
     completed = if_else(is.na(end_date), 0, 1),
     time = if_else(is.na(end_date), last_observed - start_date, end_date - start_date)
-  ) |>
-  semi_join(stc)|>
+  )
+
+largest <- tibble(trade_desc=table(reg_and_complete$trade_desc)|>sort()|>tail(n=largest_trades)|>names())
+stc_plus <- full_join(stc, largest)
+
+reg_and_complete <-reg_and_complete|>
+  semi_join(stc_plus)|>
   filter(end_date > start_date | is.na(end_date)) # sanity check: cant end before you start
+
 #the historical time series of completions-------------------------------
 observed_complete <- reg_and_complete |>
   filter(!is.na(end_date)) |>
@@ -124,19 +160,33 @@ observed_complete <- reg_and_complete |>
   arrange(trade_desc, end_date)
 # do the survival analysis--------------------------
 survival <- reg_and_complete |>
-  mutate(era=case_when(start_date<ym(min(start_date))+years(8)~"early",
-                          start_date>ym(last_observed)-years(8)~"late",
-                          TRUE ~ "middle"))|>
+  mutate(era=case_when(start_date<ym(min(start_date))+years(8)~"first 8 years",
+                          start_date>ym(last_observed)-years(8)~"last 8 years",
+                          TRUE ~ "middle 8 years"))|>
   group_by(trade_desc) |>
   nest()|>
   mutate(
     km_model = map(data, survfit_constant),
     km_split_model = map(data, survfit_split),
+    #survdiff=map(data, survdiff_wrapper), #redundant:  survminer::ggsurvplot does this
     surv_dat = map(km_model, get_joint),
+    split_data = map(km_split_model, split_data),
+    yearly_split = map(split_data, get_yearly),
+    median_delay = map(split_data, get_median),
     km_prob_complete = map_dbl(surv_dat, function(x) 1-min(x$surv))
   )|>
   arrange(km_prob_complete)
 
+#write some key findings to disk-------------------------------
+survival|>
+  select(trade_desc, yearly_split)|>
+  unnest(yearly_split)|>
+  write_csv(here("out","apprentice_completion_rates_annual.csv"))
+
+survival|>
+  select(trade_desc, median_delay)|>
+  unnest(median_delay)|>
+  write_csv(here("out","median_time_to_complete_in_months.csv"))
 
 # the time series of arrivals (new registrants at risk of completion)--------------------------------
 observed_at_risk <- reg_and_complete |>
@@ -148,12 +198,11 @@ observed_at_risk <- reg_and_complete |>
   tibble()|>
   group_by(trade_desc)|>
   mutate(max_start=max(start_date))|>
-#  filter(ym(max_start) > today()-years(1))|> #at least one person has registered in last year
   select(-max_start)|>
   as_tsibble(key = trade_desc, index = start_date)
 
 ets_fit <- observed_at_risk |>
-  model(ets_model = ETS(sqrt(new_regs)))|> #sqrt transform keeps forecast from going negative
+  model(ets_model = ETS(new_regs~trend("Ad")+error("A")))|>
   filter(!is_null_model(ets_model))
 
 ets_fcast <- ets_fit |>
@@ -193,18 +242,14 @@ actual_plus_forecast <- observed_complete|>
   nest()|>
   mutate(plot=map2(data, trade_desc, fcast_plot, "Monthly Apprentice Completions"))
 
-#plot using ets_fcast and at risk (bind them together nest them, then map plotting function)---------------
+#plot at risk arrival data (observed + forecast)
 
-at_risk_plus_forecast <- ets_fcast |>
-  as_tibble()|>
-  select(trade_desc, start_date, .mean)|>
-  rename(new_regs=.mean)|>
-  bind_rows(at_risk|>unnest(at_risk_data))|>
+ at_risk_plots <-  at_risk|>
+  unnest(at_risk_data)|>
   rename(date=start_date,
          value=new_regs)|>
-  group_by(trade_desc)|>
-  nest()|>
-  mutate(plot=map2(data, trade_desc, fcast_plot, "Monthly New Registrations"))
+  nest(at_risk_data=c("date", "value"))|>
+  mutate(plot=map2(at_risk_data, trade_desc, fcast_plot, "Monthly New Registrations"))
 
 #backcasts vs observed complete----------------------------
 
@@ -224,26 +269,99 @@ observed_vs_backcast <- observed_complete|>
 #write data to disk---------------------------
 
 survival|>
-  select(trade_desc, km_split_model, data)|>
+  select(trade_desc, surv_dat, km_split_model, data)|>
   write_rds(here("out","survival.rds"))
 
 observed_vs_backcast|>
   select(-data)|>
   write_rds(here("out","observed_vs_backcast.rds"))
 
-at_risk_plus_forecast|>
-  select(-data)|>
-  write_rds(here("out","at_risk_plus_forecast.rds"))
+at_risk_plots|>
+  select(-at_risk_data)|>
+  write_rds(here("out","at_risk_plots.rds"))
+
+at_risk|>
+  write_rds(here("out","at_risk.rds"))
 
 actual_plus_forecast|>
   select(-data)|>
   write_rds(here("out","actual_plus_forecast.rds"))
 
-actual_plus_forecast|>
+by_trade_completions <- actual_plus_forecast|>
   select(-plot)|>
   unnest(data)|>
   mutate(year=year(date))|>
   group_by(trade_desc, year)|>
   summarize(apprentice_completion_fcast=round(sum(value)))|>
-  filter(year %in% fcast_range)|>
-  write_csv(here("out","annual_apprentice_completion_forecast.csv"))
+  filter(year %in% fcast_range)
+
+write_csv(by_trade_completions, here("out","annual_apprentice_completion_forecast.csv"))
+
+#start and end dates for shading plots--------------------------------
+tibble(x0 = as.integer(ym(reg_and_complete$last_observed[1])),
+       x1 = as.integer(ym(max(f_and_b_cast$complete_date)+month(1))))|>
+  write_rds(here("out","dates.rds"))
+
+#compare with LMO demand----------------------------------------
+
+mapping <- read_csv(here("out","trade_noc_mapping.csv"))|>
+  select(-STC_Trades)|>
+  rename(trade_desc=Trade)
+
+by_noc_completions <- by_trade_completions|>
+  inner_join(mapping)|>
+  group_by(year, NOC_Code_2021, NOC_2021)|>
+  summarize(apprentice_completions=sum(apprentice_completion_fcast))
+
+new_reg_forecast <- at_risk|>
+  inner_join(mapping)|>
+  unnest(at_risk_data)|>
+  mutate(start_date=year(ym(start_date)))|>
+  group_by(year=start_date, NOC_Code_2021, NOC_2021)|>
+  summarize(apprentice_new_reg=sum(new_regs))
+
+#' demand for journeypersons is assumed to be twice replacement demand plus 1/3 of expansion demand.
+#' Re twice, for every retirement or death we assume there is another journeyperson that changes occupations.
+#' Re 1/3, want a 1:2 relationship between journeyperson and apprentice.
+#' Apprentice demand is double journeyperson demand (1:2 relationship)
+
+demand <- read_excel(here("data","demand.xlsx"), skip = 3)|>
+  select(NOC_Code_2021=NOC, NOC_2021=Description, Variable, starts_with("2"))|>
+  pivot_longer(cols = starts_with("2"), names_to = "year", values_to = "value")|>
+  mutate(NOC_Code_2021=as.numeric(str_remove_all(NOC_Code_2021, "#")),
+         year=as.numeric(year))|>
+  pivot_wider(names_from = Variable, values_from = value)|>
+  semi_join(mapping)|>
+  mutate(journeyperson_demand=2*`Replacement Demand (Deaths & Retirements)`+1/3*`Expansion Demand`,
+         apprentice_demand=2*journeyperson_demand)|>
+  select(year, contains("NOC"), contains("_demand"))
+
+inner_join(by_noc_completions, demand)|>
+  select(-apprentice_demand)|>
+  rename(demand=journeyperson_demand,
+         supply=apprentice_completions)|>
+  pivot_longer(cols=c(demand, supply), names_to = "series", values_to = "value")|>
+  write_rds(here("out","completions_vs_demand.rds"))
+
+#for apprentices-------------------------
+
+full_join(new_reg_forecast, demand)|>
+  select(-journeyperson_demand)|>
+  rename(demand=apprentice_demand,
+         supply=apprentice_new_reg)|>
+  na.omit()|>
+  pivot_longer(cols=c(demand, supply), names_to = "series", values_to = "value")|>
+  write_rds(here("out","new_regs_vs_demand.rds"))
+
+
+
+
+
+
+
+
+
+
+
+
+
