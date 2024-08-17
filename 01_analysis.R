@@ -26,9 +26,11 @@ library(patchwork)
 library(conflicted)
 conflicts_prefer(dplyr::filter)
 largest_trades <- 20
-fcast_horizon <- 120
+fcast_start <- 2025
+fcast_end <- fcast_start+9
+fcast_range <- fcast_start:fcast_end
+fcast_horizon <- 180 #longer than needed
 font_size <- 15
-fcast_range <- 2023:2033
 
 complete_wrapper <- function(surv_dat, at_risk) {#at_risk is the historical+ets forecast of new registrations tibble
   complete <- function(start_date, new_regs) {
@@ -43,13 +45,13 @@ complete_wrapper <- function(surv_dat, at_risk) {#at_risk is the historical+ets 
 
 tidy_up <- function(tbbl) {
   start <- yearmonth(ym(min(reg_and_complete$start_date)) + months(fcast_horizon))
-  end <- yearmonth(ym(reg_and_complete$last_observed[1]) + months(fcast_horizon))
+  end <- yearmonth(paste(fcast_end,"/12"))
   tbbl |>
     select(data) |>
     unnest(data) |>
     group_by(complete_date) |>
     summarize(expected_complete = sum(expected_complete)) |>
-    filter(complete_date > start & complete_date < end)
+    filter(complete_date > start & complete_date <= end)
 }
 
 survfit_constant <- function(tbbl) {
@@ -57,9 +59,6 @@ survfit_constant <- function(tbbl) {
 }
 survfit_split <- function(tbbl) {
   survfit(Surv(time, completed) ~ era, tbbl)
-}
-survdiff_wrapper <- function(tbbl) {
-  survdiff(Surv(time, completed) ~ era, tbbl)
 }
 get_joint <- function(mod_lst) {
   tibble(
@@ -109,7 +108,7 @@ split_data <- function(mod_list){
 
 get_yearly <- function(tbbl){
   tbbl|>
-    filter(time %in% seq(12,240,12))|>
+    filter(time %in% seq(12,240, 12))|>
     mutate(years_since_registration=time/12,
            proportion_complete=1-surv)|>
     as_tibble()|>
@@ -168,7 +167,6 @@ survival <- reg_and_complete |>
   mutate(
     km_model = map(data, survfit_constant),
     km_split_model = map(data, survfit_split),
-    #survdiff=map(data, survdiff_wrapper), #redundant:  survminer::ggsurvplot does this
     surv_dat = map(km_model, get_joint),
     split_data = map(km_split_model, split_data),
     yearly_split = map(split_data, get_yearly),
@@ -212,7 +210,8 @@ ets_fcast <- ets_fit |>
 at_risk <- ets_fcast |>
   tibble()|>
   select(start_date, trade_desc, new_regs = .mean)|>
-  bind_rows(observed_at_risk) |>
+  bind_rows(observed_at_risk)|>
+  filter(start_date<=yearmonth(paste(fcast_end,"/12")))|>
   nest(at_risk_data=c(start_date, new_regs))
 
 # all data applies joint probabilities of "death" to historical+forecast at risk(i.e. forecasts AND backcasts)
@@ -299,7 +298,7 @@ write_csv(by_trade_completions, here("out","annual_apprentice_completion_forecas
 
 #start and end dates for shading plots--------------------------------
 tibble(x0 = as.integer(ym(reg_and_complete$last_observed[1])),
-       x1 = as.integer(ym(max(f_and_b_cast$complete_date)+month(1))))|>
+       x1 = as.integer(ym(paste(fcast_end,"/12"))))|>
   write_rds(here("out","dates.rds"))
 
 #compare with LMO demand----------------------------------------
@@ -325,14 +324,15 @@ new_reg_forecast <- at_risk|>
 #' Re 1/3, want a 1:2 relationship between journeyperson and apprentice.
 #' Apprentice demand is double journeyperson demand (1:2 relationship)
 
-demand <- read_excel(here("data","demand.xlsx"), skip = 3)|>
+demand <- read_excel(here("data","demand2024.xlsx"), skip = 3)|>
+  filter(Variable %in% c("Expansion Demand","Replacement Demand"))|>
   select(NOC_Code_2021=NOC, NOC_2021=Description, Variable, starts_with("2"))|>
   pivot_longer(cols = starts_with("2"), names_to = "year", values_to = "value")|>
   mutate(NOC_Code_2021=as.numeric(str_remove_all(NOC_Code_2021, "#")),
          year=as.numeric(year))|>
   pivot_wider(names_from = Variable, values_from = value)|>
   semi_join(mapping)|>
-  mutate(journeyperson_demand=2*`Replacement Demand (Deaths & Retirements)`+1/3*`Expansion Demand`,
+  mutate(journeyperson_demand=2*`Replacement Demand`+1/3*`Expansion Demand`,
          apprentice_demand=2*journeyperson_demand)|>
   select(year, contains("NOC"), contains("_demand"))
 

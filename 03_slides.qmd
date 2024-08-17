@@ -94,7 +94,7 @@ simple_plt+real_plt
 -   Suppose you had a six sided (fair) die where numbers are either red or black.
 
 ::: {layout-ncol="3"}
-![](Screenshot%20from%202024-08-12%2011-24-31.png)
+![](die.png)
 
 ```{r}
 kableExtra::kbl(tibble(number=1:6, colour=c(rep("red",3), rep("black",3))))
@@ -165,6 +165,3 @@ ggplot(joint[[1]], aes(time, joint))+
 
 ```
 
-## Check out my app!
-
-[apprentice completions](https://bc-psfs.shinyapps.io/survival/#section-forecast-of-apprentice-completions)
