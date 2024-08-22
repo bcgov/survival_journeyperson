@@ -144,7 +144,7 @@ reg_and_complete <- read_excel(here("data", "Completion App Data.xlsx"),
     time = if_else(is.na(end_date), last_observed - start_date, end_date - start_date)
   )
 
-largest <- tibble(trade_desc=table(reg_and_complete$trade_desc)|>sort()|>tail(n=largest_trades)|>names())
+largest <- tibble(trade_desc=c("Drywall Finisher",table(reg_and_complete$trade_desc)|>sort()|>tail(n=largest_trades)|>names()))
 stc_plus <- full_join(stc, largest)
 
 reg_and_complete <-reg_and_complete|>
