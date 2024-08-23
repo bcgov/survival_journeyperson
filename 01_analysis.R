@@ -135,6 +135,9 @@ reg_and_complete <- read_excel(here("data", "Completion App Data.xlsx"),
                                sheet = "Sheet1",
                                na = "NULL") |>
   clean_names()|>
+  mutate(registration_end_date=as.character(registration_end_date),
+         registration_end_date=if_else(registration_status_desc=="DEREG", NA_character_, registration_end_date), #DEREGs were mistakenly recorded as complete
+         registration_end_date=ymd(registration_end_date))|>
   select(start_date=registration_start_date, end_date=registration_end_date, trade_desc) |>
   mutate(
     start_date = tsibble::yearmonth(lubridate::ymd(start_date)),
