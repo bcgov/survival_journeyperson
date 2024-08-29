@@ -89,34 +89,6 @@ real_plt <- ggplot(real, aes(`completion time (months)`, `probability of complet
 simple_plt+real_plt
 ```
 
-## A refresher on probability:
-
--   Suppose you had a six sided (fair) die where numbers are either red or black.
-
-::: {layout-ncol="3"}
-![](die.png)
-
-```{r}
-kableExtra::kbl(tibble(number=1:6, colour=c(rep("red",3), rep("black",3))))
-```
-
--   What is the probability of rolling a red?
--   Conditional on rolling a red, what is the probability of rolling a 2?
-:::
-
-## What is the *joint* probability of rolling a 2 *and* a red (with a single roll of the die)?
-
-$$P(2 \cap red)=P(2|red) \times P(red)=\frac13\times\frac12=\frac16$$
-
-## Kaplan-Meier estimation:
-
--   yields non-parametric estimates of survival curves, which allow for derivation of transition probabilities.
--   A transition probability is a joint probability: the probability of BOTH completion this instant AND survival thus far.
--   The hazard rate is the instantaneous probability of completion conditional on survival thus far.
--   The probability of survival thus far is plotted in survival curves.
-
-$$P(completion \cap survival) =P(completion~|~survival) \times P(survival) $$
-
 ## Powerline Technicians
 
 ```{r, fig.height=8, fig.retina=2}
