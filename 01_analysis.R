@@ -136,7 +136,7 @@ reg_and_complete <- read_excel(here("data", "Completion App Data.xlsx"),
                                na = "NULL") |>
   clean_names()|>
   mutate(registration_end_date=as.character(registration_end_date),
-         registration_end_date=if_else(registration_status_desc=="DEREG", NA_character_, registration_end_date), #DEREGs were mistakenly recorded as complete
+         registration_end_date=if_else(registration_status_desc=="DEREG", NA_character_, registration_end_date), #DEREGs should be missing date of completion
          registration_end_date=ymd(registration_end_date))|>
   select(start_date=registration_start_date, end_date=registration_end_date, trade_desc) |>
   mutate(
@@ -147,8 +147,18 @@ reg_and_complete <- read_excel(here("data", "Completion App Data.xlsx"),
     time = if_else(is.na(end_date), last_observed - start_date, end_date - start_date)
   )
 
-largest <- tibble(trade_desc=c("Drywall Finisher",table(reg_and_complete$trade_desc)|>sort()|>tail(n=largest_trades)|>names()))
-stc_plus <- full_join(stc, largest)
+
+largest <- tibble(trade_desc=table(reg_and_complete$trade_desc)|>sort()|>tail(n=largest_trades)|>names())
+additional <- tibble(trade_desc=c("Lather (Interior Systems Mechanic) (Wall & Ceiling Installer)",
+                                  "Drywall Finisher"))#,
+                     #              "Cook",
+                     #              "Piledriver And Bridgeworker",
+                     #              "Asphalt Paving/Laydown Technician",
+                     #              "Residential Steep Roofer")
+                     # )
+                     #these additional trades feed into occupations shared by the largest and stc trades... but very uncommon.
+stc_plus <- full_join(stc, largest)|>
+  full_join(additional)
 
 reg_and_complete <-reg_and_complete|>
   semi_join(stc_plus)|>

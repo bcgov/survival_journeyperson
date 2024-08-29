@@ -39,12 +39,25 @@ new_regs_vs_demand <- read_rds(here("out", "new_regs_vs_demand.rds"))|>
   arrange(NOC_2021, year)
 
 #save after running each year's version
-sheets_2023 <- list("apprentice D&S 2023"=new_regs_vs_demand, "journeyperson D&S 2023"=completions_vs_demand)
-#sheets_2024 <- list("apprentice D&S 2024"=new_regs_vs_demand, "journeyperson D&S 2024"=completions_vs_demand)
+#sheets_2023 <- list("apprentice D&S 2023"=new_regs_vs_demand, "journeyperson D&S 2023"=completions_vs_demand)
+sheets_2024 <- list("apprentice D&S 2024"=new_regs_vs_demand, "journeyperson D&S 2024"=completions_vs_demand)
 
 sheets=c(sheets_2023, sheets_2024)
 
-openxlsx::write.xlsx(sheets, here("out","construction_apprentice_journeyperson_forecasts.xlsx"))
+openxlsx::write.xlsx(sheets, here("out","with_lathers.xlsx"))
+
+#description of mapping
+
+mapping <- read_csv(here("out","trade_noc_mapping.csv"))
+
+mapping|>
+  group_by(NOC_2021)|>
+  count()|>
+  filter(n>1)|>
+  arrange(desc(n))|>
+  rename(`# of feeder trades`=n)|>
+  na.omit()|>
+  write_csv(here("out","many_2_one_trades_2_noc.csv"))
 
 
 
