@@ -1,7 +1,9 @@
 ---
 title: "Forecasting Apprentice Completions"
 author: "Richard Martin"
-format: revealjs
+format: 
+  revealjs:
+    self-contained: true
 ---
 
 ```{r}
@@ -10,8 +12,16 @@ library(tsibble)
 library(conflicted)
 library(patchwork)
 library(here)
+library(gganimate)
 conflicts_prefer(dplyr::filter)
 font_size=18
+#functions----------------------
+make_fcast <- function(reg_date, regs, tbbl){
+  tbbl|>
+    mutate(real_completions=`probability of completion`*regs,
+           real_date=reg_date+months(`completion time (months)`)
+           )
+}
 my_survplot <- function(mod, dat, grp) {
   plt <- survminer::ggsurvplot(mod,
     dat,
@@ -39,55 +49,130 @@ survival <- read_rds(here("out","survival.rds"))
 -   The goal is to forecast apprentice completions in BC.
 -   We could use the historic completions and standard time series forecasting techniques, but...
 
-![the road ahead might not look like the road behind](rear-view-mirror.jpg)
+![the road ahead might not look like the road behind](blacked_out.jpg)
 
 ## Apprentice registrations are a leading indicator of apprentice completions.
 
-![road signs: a leading indicator of road direction](signs.png)
+![road signs: a leading indicator of road direction](with_signs.jpg)
 
 ## A simple forecast based on registrations:
 
--   Assume for the sake of argument that 75% of those who register complete their apprenticeship, and they all take exactly 48 months to complete.
--   We would form our forecast by taking an observation of new registrants, adding 48 months and multiplying by .75.
+-   Assume for the sake of argument that 50% of those who register complete their apprenticeship, and they all take exactly 48 months to complete.
+-   We would form our forecast by adding 48 months to the registration date, and divide the number of new registrants by 2.
 
 ## A simple forecast:
 
-```{r}
-sim_dates <- seq(floor_date(today()-months(48), unit = "month"),floor_date(today(), unit = "month"), by="month")
-new_reg <- sin(seq(0,2*pi, length=length(sim_dates)))+10
-sim <- tibble(sim_dates=sim_dates, `new registrants`=new_reg)|>
-  pivot_longer(cols = `new registrants`, names_to = "series", values_to = "value")
-fcast <- sim|>
-  mutate(sim_dates=sim_dates+months(48),
-         value=.75*value,
-         series="simple completion forecast")
-ggplot(mapping=aes(sim_dates, value, colour=series))+
-  geom_line(data=sim)+
-  geom_line(data=fcast)+ 
-  annotate("segment", x = min(sim_dates), xend = min(sim_dates), y = 7.5, yend = 10, lty=2)+
-  annotate("segment", x = min(sim_dates), xend = (min(sim_dates)+months(48)), y = 7.5, yend = 7.5, lty=2)+
-  annotate("text", x = min(sim_dates)+months(5), y = 8.75, label = "-25%")+
-  annotate("text", x = min(sim_dates)+months(24), y = 7.7, label = "+48 months")
+```{r, fig.retina=2, cache=TRUE}
+colors <- c("New Registrations" = "blue", 
+            "Simple forecast of completions" = "red",
+            "More realistic forecast of completions"="purple")
+reg_date <- seq.Date(today()-months(48), today(), by = "month")
+new_regs <- 10+2*rnorm(49)
+time <- 1:49
+tbbl <- tibble(reg_date, new_regs, time)|>
+  mutate(simple_date=reg_date+months(48),
+         simple_completions=new_regs*.5)
+
+p <- ggplot(tbbl)+
+  geom_line(aes(reg_date, new_regs, colour="New Registrations"))+
+  geom_line(aes(simple_date, simple_completions, colour="Simple forecast of completions"))+
+  labs(x=NULL, y=NULL, colour=NULL, title="New Registrations and Completions")+
+  scale_colour_manual(values=colors)+
+  annotate("segment", 
+           x = reg_date[time], 
+           xend = reg_date[time], 
+           y = new_regs[time], 
+           yend = tbbl$simple_completions[time], 
+           lty=2, 
+           arrow = arrow(length = unit(0.1, "inches")))+
+  annotate("segment", 
+           x = reg_date[time], 
+           xend = tbbl$simple_date[time], 
+           y = tbbl$simple_completions[time], 
+           yend = tbbl$simple_completions[time], 
+           lty=2, 
+           arrow = arrow(length = unit(0.1, "inches")))+
+  annotate("text", 
+           x = reg_date[time]-months(4), 
+           y = (tbbl$new_regs[time]+tbbl$simple_completions[time])/2, 
+           label = "-50%")+
+  annotate("text", 
+           x = reg_date[time]+months(24), 
+           y = .95*tbbl$simple_completions[time], 
+           label = "+48 months")
+
+p +
+  geom_point(aes(reg_date, new_regs)) +
+  geom_point(aes(simple_date, simple_completions))+
+  transition_reveal(time)
+
 ```
+
 
 ## Simple vs. slightly more realistic transistion probabilities.
 
 ```{r}
-simple <- tibble(`completion time`="48 months", `probability of completion`=.75)
+simple <- tibble(`completion time`="48 months", `probability of completion`=.5)
 simple_plt <- ggplot(simple, aes(`completion time`, `probability of completion`))+
   geom_col(width = .05)+
-  labs(title="75% completion rate, all at 48 months")
+  labs(title="50% completion rate, all at 48 months")
 
 real <- tibble(`completion time (months)`=36:60,
                    x=seq(-3,3, length=length(`completion time (months)`)),
-                   `probability of completion` = .75*dnorm(x)/sum(dnorm(x)))
+                   `probability of completion` = .5*dnorm(x)/sum(dnorm(x)))
                    
 real_plt <- ggplot(real, aes(`completion time (months)`, `probability of completion`))+
   geom_col()+
-  labs(title="75% completion rate, centered at 48 months.")
+  labs(title="50% completion rate, centered at 48 months.")
 
 simple_plt+real_plt
 ```
+
+```{r}
+more_realistic <- tbbl|>
+  select(reg_date, new_regs, time)|>
+  mutate(transistion_probs=list(real))|>
+  mutate(completions=pmap(list(reg_date, new_regs, transistion_probs), make_fcast))|>
+  select(completions)|>
+  unnest(c(completions))|>
+  group_by(real_date)|>
+  summarize(real_completions=sum(real_completions))
+
+
+
+more_realistic <- more_realistic|>
+  full_join(tbbl, by=c("real_date"="simple_date"))|>
+  na.omit()|>
+  mutate(simple_date=real_date)|>
+  filter(time %in% 12:36)
+ 
+```
+
+## Simple vs more realistic forecast:
+
+```{r, fig.retina=2, cache=TRUE}
+p <- ggplot(more_realistic)+
+  geom_line(aes(reg_date, new_regs, colour="New Registrations"))+
+  geom_line(aes(simple_date, simple_completions, colour="Simple forecast of completions"))+
+  geom_line(aes(real_date, real_completions, colour="More realistic forecast of completions"))+
+  labs(x=NULL, y=NULL, title="New Registrations and Completions")+
+  scale_colour_manual(values=colors)
+
+p + 
+  geom_point(aes(reg_date, new_regs, colour="New Registrations")) +
+  geom_point(aes(simple_date, simple_completions, colour="Simple forecast of completions"))+
+  geom_point(aes(real_date, real_completions, colour="More realistic forecast of completions"))+
+  transition_reveal(time)
+
+```
+
+## Estimation:
+
+-   We use historical completion data to estimate, rather than assume, the transition probabilities.
+-   Kaplan-Meier estimation yields the two components necessary.
+
+1)  Survival Curve: the probability of "surviving" (remaining an apprentice) for every duration post registration.
+2)  Hazard Rate: the instantaneous probability of "death" (becoming a journeyperson), conditional on survival thus far.
 
 ## Powerline Technicians
 
@@ -112,8 +197,6 @@ ggplot(joint[[1]], aes(time, joint))+
 
 ```
 
--   Splitting data into eras allows us to investigate whether or not transition dynamics are historically stable.
-
 ## Plumbers:
 
 ```{r, fig.height=8, fig.retina=2}
@@ -136,4 +219,16 @@ ggplot(joint[[1]], aes(time, joint))+
   theme(text=element_text(size=font_size))
 
 ```
+
+##   Are transition dynamics stable over time?
+
+-   If yes, more confident that future dynamics will look like historical dynamics.
+-   If no, are we doing better or worse over time, regarding the conversion of apprentices to journey-persons?
+
+    1) Is the proportion that (eventually) complete changing over time? (1-height of flat part of survival curve)
+    2) Is the distribution of completion times changing over time? (the closer the curves are to the y-axis, the quicker the completion.)
+    
+##  The App:
+
+
 
