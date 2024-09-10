@@ -1,5 +1,6 @@
 ---
 title: "Forecasting Apprentice Completions"
+subtitle: "... the goal is not survival"
 author: "Richard Martin"
 format: 
   revealjs:
@@ -15,6 +16,7 @@ library(here)
 library(gganimate)
 conflicts_prefer(dplyr::filter)
 font_size=18
+set.seed(1)
 #functions----------------------
 make_fcast <- function(reg_date, regs, tbbl){
   tbbl|>
@@ -42,18 +44,113 @@ my_survplot <- function(mod, dat, grp) {
     )
 }
 survival <- read_rds(here("out","survival.rds"))
+congestion <- read_rds(here("out","congestion.rds"))
 ```
 
-## Introduction
+## What would be your forecast of this monthly time series?
 
--   The goal is to forecast apprentice completions in BC.
--   We could use the historic completions and standard time series forecasting techniques, but...
+```{r}
+dates <- seq.Date(today()-years(10), today(), by = "month")
+`Apprentice Completions` <- round(50+10*rnorm(length(dates)))
+flat_registrations <- c(100+10*rnorm(length(dates)-24))
+increasing_registrations <- 100*1.025^(1:24)+10*rnorm(24)
+tbbl <- tibble(dates, `Apprentice Completions`, `New Registrations`=round(c(flat_registrations, increasing_registrations)))
 
-![the road ahead might not look like the road behind](blacked_out.jpg)
+tbbl|>
+  ggplot(aes(dates, `Apprentice Completions`, colour="Apprentice Completions"))+
+  geom_hline(yintercept = 50, colour="white", lwd=1.25)+
+  geom_line()+
+  labs(x=NULL, y=NULL, colour=NULL)+
+  scale_y_continuous(limits = c(0,200), breaks = seq(0,200,25))+ 
+  theme(text=element_text(size=20))+
+  annotate("rect", xmin = today(), xmax = today()+months(24),
+           ymin = -Inf, ymax = Inf, alpha = 1, fill="grey90")+
+  geom_text(aes(x = today()+months(12), y = 100, label = "?"), colour="black", size = 10) 
+```
 
-## Apprentice registrations are a leading indicator of apprentice completions.
+## Applying this logic to driving would be problematic
 
-![road signs: a leading indicator of road direction](with_signs.jpg)
+-   ... unless you live in Saskatchewan.
+
+![](blacked_out.jpg)
+
+## Would observing new apprentice registrations influence your forecast?
+
+```{r, fig.retina=2}
+tbbl|>
+  pivot_longer(cols=-dates)|>
+  ggplot(aes(dates, value, colour=name))+
+  geom_line()+
+  labs(x=NULL, y=NULL, colour=NULL)+
+  scale_y_continuous(limits = c(0,200), breaks = seq(0,200,25))+ 
+  theme(text=element_text(size=20))+
+  annotate("rect", xmin = today()-months(24), xmax = today()+months(24),
+           ymin = -Inf, ymax = Inf, alpha = 1, fill="grey90")+
+  geom_text(aes(x = today(), y = 100, label = "?"), colour="black", size = 10) 
+```
+
+## Would observing new apprentice registrations influence your forecast?
+
+```{r, fig.retina=2}
+tbbl|>
+  pivot_longer(cols=-dates)|>
+  ggplot(aes(dates, value, colour=name))+
+  geom_line()+
+  labs(x=NULL, y=NULL, colour=NULL)+
+  scale_y_continuous(limits = c(0,200), breaks = seq(0,200,25))+ 
+  theme(text=element_text(size=20))+
+  annotate("rect", xmin = today(), xmax = today()+months(24),
+           ymin = -Inf, ymax = Inf, alpha = 1, fill="grey90")+
+  geom_text(aes(x = today()+months(12), y = 100, label = "?"), colour="black", size = 10) 
+```
+
+## Main assumption:
+
+-   The arrival rate of new registrants is **the** constraint on the "production" of journeypersons.
+-   i.e. "production" scales up/down with the arrival rate of registrants, without changes in attrition or delay (no congestion effects). 
+-   If true,  we can use new registrants as a leading indicator of apprentice completions.
+
+## Isn't it ironic...
+
+-   that only Automotive Service Technicians suffer from congestion?
+
+
+```{r, fig.retina=2}
+plt <- ggplot(mapping=aes(completion_cor, 
+                              delay_cor, 
+                              text=paste0(
+                                trade_desc,
+                                "\n Probability of completion cor: ",
+                                round(completion_cor,2), 
+                                "\n Time to completion cor: ",
+                                round(delay_cor,2)
+                                )
+                              )
+              )+
+  geom_vline(xintercept = 0, colour="white", lwd=1.5)+
+  geom_hline(yintercept = 0, colour="white", lwd=1.5)+
+  geom_point(data=congestion|>filter(completion_cor<.4, delay_cor>.4), colour="red", size = 3)+
+  geom_point(data=congestion)+
+  labs(x="cor(cohort size, probability of completion)",
+       y="cor(cohort size, time to completion")+
+  scale_x_continuous(limits=c(-1,1))+
+  scale_y_continuous(limits=c(-1,1))
+  
+ plotly::ggplotly(plt, tooltip = "text")|>
+  plotly::layout(
+    title = list(
+      text = "Does cohort size affect measures of completion?<br><sub>If congestion a problem, we would expect cohort size to be - related to probability of completion, + related to time to completion.</sub>",
+      x = 0.5,
+      xanchor = 'center',
+      y = 1.1,
+      yanchor = 'bottom'
+  ),
+  margin = list(t = 100)  # Add margin to prevent overlap
+)
+```
+
+
+
 
 ## A simple forecast based on registrations:
 
@@ -67,7 +164,7 @@ colors <- c("New Registrations" = "blue",
             "Simple forecast of completions" = "red",
             "More realistic forecast of completions"="purple")
 reg_date <- seq.Date(today()-months(48), today(), by = "month")
-new_regs <- 10+2*rnorm(49)
+new_regs <- 100+10*rnorm(49)
 time <- 1:49
 tbbl <- tibble(reg_date, new_regs, time)|>
   mutate(simple_date=reg_date+months(48),
@@ -76,6 +173,8 @@ tbbl <- tibble(reg_date, new_regs, time)|>
 p <- ggplot(tbbl)+
   geom_line(aes(reg_date, new_regs, colour="New Registrations"))+
   geom_line(aes(simple_date, simple_completions, colour="Simple forecast of completions"))+
+  geom_point(aes(reg_date, new_regs)) +
+  geom_point(aes(simple_date, simple_completions))+
   labs(x=NULL, y=NULL, colour=NULL, title="New Registrations and Completions")+
   scale_colour_manual(values=colors)+
   annotate("segment", 
@@ -99,12 +198,10 @@ p <- ggplot(tbbl)+
   annotate("text", 
            x = reg_date[time]+months(24), 
            y = .95*tbbl$simple_completions[time], 
-           label = "+48 months")
-
-p +
-  geom_point(aes(reg_date, new_regs)) +
-  geom_point(aes(simple_date, simple_completions))+
+           label = "+48 months")+
   transition_reveal(time)
+
+animate(p, renderer = gifski_renderer())
 
 ```
 
@@ -138,8 +235,6 @@ more_realistic <- tbbl|>
   group_by(real_date)|>
   summarize(real_completions=sum(real_completions))
 
-
-
 more_realistic <- more_realistic|>
   full_join(tbbl, by=c("real_date"="simple_date"))|>
   na.omit()|>
@@ -155,34 +250,33 @@ p <- ggplot(more_realistic)+
   geom_line(aes(reg_date, new_regs, colour="New Registrations"))+
   geom_line(aes(simple_date, simple_completions, colour="Simple forecast of completions"))+
   geom_line(aes(real_date, real_completions, colour="More realistic forecast of completions"))+
-  labs(x=NULL, y=NULL, title="New Registrations and Completions")+
-  scale_colour_manual(values=colors)
-
-p + 
   geom_point(aes(reg_date, new_regs, colour="New Registrations")) +
   geom_point(aes(simple_date, simple_completions, colour="Simple forecast of completions"))+
   geom_point(aes(real_date, real_completions, colour="More realistic forecast of completions"))+
+  labs(x=NULL, y=NULL, title="New Registrations and Completions")+
+  scale_colour_manual(values=colors)+ 
   transition_reveal(time)
 
+animate(p, renderer = gifski_renderer())
 ```
 
 ## Estimation:
 
--   We use historical completion data to estimate, rather than assume, the transition probabilities.
--   Kaplan-Meier estimation yields the two components necessary.
+-   We use Kaplan-Meier and historical completion data to estimate, rather than assume, the transition probabilities.
+-   The transition probabilities are the joint probability of "survival thus far" (not yet a journey-person) and the instantaneous probability of "death" (graduation).
 
-1)  Survival Curve: the probability of "surviving" (remaining an apprentice) for every duration post registration.
-2)  Hazard Rate: the instantaneous probability of "death" (becoming a journeyperson), conditional on survival thus far.
+1)  Survival Curve: the probability of "survival thus far". 
+2)  Hazard Rate: the instantaneous probability of "death", conditional on survival thus far.
 
-## Powerline Technicians
+##
 
 ```{r, fig.height=8, fig.retina=2}
 #| layout-ncol: 2
 #| column: page
 plt <- survival|>
     filter(trade_desc=="Powerline Technician")|>
-    mutate(km_split_plot = pmap(list(km_split_model, data, trade_desc), my_survplot))
-plt$km_split_plot[[1]]
+    mutate(km_plot = pmap(list(km_model, data, trade_desc), my_survplot))
+plt$km_plot[[1]]
 
 joint <- survival|>
   filter(trade_desc=="Powerline Technician")|>
@@ -197,15 +291,15 @@ ggplot(joint[[1]], aes(time, joint))+
 
 ```
 
-## Plumbers:
+## 
 
 ```{r, fig.height=8, fig.retina=2}
 #| layout-ncol: 2
 #| column: page
 plt <- survival|>
     filter(trade_desc=="Plumber")|>
-    mutate(km_split_plot = pmap(list(km_split_model, data, trade_desc), my_survplot))
-plt$km_split_plot[[1]]
+    mutate(km_plot = pmap(list(km_model, data, trade_desc), my_survplot))
+plt$km_plot[[1]]
 
 joint <- survival|>
   filter(trade_desc=="Plumber")|>
@@ -220,14 +314,25 @@ ggplot(joint[[1]], aes(time, joint))+
 
 ```
 
-##   Are transition dynamics stable over time?
+## Are transition dynamics stable?
 
--   If yes, more confident that future dynamics will look like historical dynamics.
--   If no, are we doing better or worse over time, regarding the conversion of apprentices to journey-persons?
+```{r, fig.height=8, fig.retina=2}
+#| layout-ncol: 2
+#| column: page
+plt <- survival|>
+    filter(trade_desc=="Powerline Technician")|>
+    mutate(km_plot = pmap(list(km_split_model, data, trade_desc), my_survplot))
+plt$km_plot[[1]]
 
-    1) Is the proportion that (eventually) complete changing over time? (1-height of flat part of survival curve)
-    2) Is the distribution of completion times changing over time? (the closer the curves are to the y-axis, the quicker the completion.)
-    
+plt <- survival|>
+    filter(trade_desc=="Plumber")|>
+    mutate(km_plot = pmap(list(km_split_model, data, trade_desc), my_survplot))
+plt$km_plot[[1]]
+```
+
+-   Yes: we can be more confident in forecasts.
+-   No: are we doing better or worse over time?
+
 ##  The App:
 
 

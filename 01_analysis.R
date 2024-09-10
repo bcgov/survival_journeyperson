@@ -32,6 +32,25 @@ fcast_range <- fcast_start:fcast_end
 fcast_horizon <- 180 #longer than needed
 font_size <- 15
 
+get_cor <- function(tbbl, var){
+  with(tbbl, cor(cohort_size, get(var), use = "pairwise.complete.obs"))
+}
+
+get_stats <- function(tbbl){
+  size_and_prop <- tbbl|>
+    group_by(start_date)|>
+    summarize(cohort_size=n(),
+              prop_complete=sum(completed)/n()
+    )
+  delay <- tbbl|>
+    filter(completed==1)|>
+    group_by(start_date)|>
+    summarise(mean_delay=mean(time, na.rm = TRUE))
+
+  full_join(size_and_prop, delay)
+}
+
+
 complete_wrapper <- function(surv_dat, at_risk) {#at_risk is the historical+ets forecast of new registrations tibble
   complete <- function(start_date, new_regs) {
     tibble(
@@ -164,6 +183,19 @@ reg_and_complete <-reg_and_complete|>
   semi_join(stc_plus)|>
   filter(end_date > start_date | is.na(end_date)) # sanity check: cant end before you start
 
+# are there congestion effects?
+
+reg_and_complete|>
+  filter(start_date<today()-years(5))|> #gives a reasonable amount of time to complete.
+  group_by(trade_desc)|>
+  nest()|>
+  mutate(stats=map(data, get_stats))|>
+  mutate(completion_cor=map_dbl(stats, get_cor, "prop_complete"),
+         delay_cor=map_dbl(stats, get_cor, "mean_delay")
+         )|>
+  select(-data, -stats)|>
+  write_rds(here("out", "congestion.rds"))
+
 #the historical time series of completions-------------------------------
 observed_complete <- reg_and_complete |>
   filter(!is.na(end_date)) |>
@@ -281,7 +313,7 @@ observed_vs_backcast <- observed_complete|>
 #write data to disk---------------------------
 
 survival|>
-  select(trade_desc, surv_dat, km_split_model, data)|>
+  select(trade_desc, surv_dat, km_model, km_split_model, data)|>
   write_rds(here("out","survival.rds"))
 
 observed_vs_backcast|>
