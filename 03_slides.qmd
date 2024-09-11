@@ -106,7 +106,7 @@ tbbl|>
 
 ## Main assumption:
 
--   The arrival rate of new registrants is **the** constraint on the "production" of journeypersons.
+-   The arrival rate of new registrants is **the** constraint on the "production" of journey-persons.
 -   i.e. "production" scales up/down with the arrival rate of registrants, without changes in attrition or delay (no congestion effects). 
 -   If true,  we can use new registrants as a leading indicator of apprentice completions.
 

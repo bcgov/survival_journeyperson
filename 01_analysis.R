@@ -201,6 +201,9 @@ observed_complete <- reg_and_complete |>
   filter(!is.na(end_date)) |>
   group_by(trade_desc, end_date) |>
   summarize(observed_complete = n()) |>
+  as_tsibble(key=trade_desc, index = end_date)|>
+  tsibble::fill_gaps(observed_complete=0, .full=TRUE)|> #make implicit missing explicit zeros
+  as_tibble()|>
   arrange(trade_desc, end_date)
 # do the survival analysis--------------------------
 survival <- reg_and_complete |>
