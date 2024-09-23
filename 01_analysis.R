@@ -50,7 +50,6 @@ get_stats <- function(tbbl){
   full_join(size_and_prop, delay)
 }
 
-
 complete_wrapper <- function(surv_dat, at_risk) {#at_risk is the historical+ets forecast of new registrations tibble
   complete <- function(start_date, new_regs) {
     tibble(
@@ -74,7 +73,7 @@ tidy_up <- function(tbbl) {
 }
 
 survfit_constant <- function(tbbl) {
-  survfit(Surv(time, completed) ~ 1, tbbl)
+  survfit(Surv(time, completed) ~ 1, tbbl|>filter(era=="last 8 years")) #try using most recent data only
 }
 survfit_split <- function(tbbl) {
   survfit(Surv(time, completed) ~ era, tbbl)
