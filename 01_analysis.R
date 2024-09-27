@@ -124,24 +124,30 @@ split_data <- function(mod_list){
     tidyr::fill(surv, .direction = "down")
 }
 
-get_yearly <- function(tbbl){
-  tbbl|>
-    filter(time %in% seq(12,240, 12))|>
-    mutate(years_since_registration=time/12,
-           proportion_complete=1-surv)|>
-    as_tibble()|>
-    select(era, years_since_registration, proportion_complete)
-}
-get_median <- function(tbbl){
-  tbbl|>
-    as_tibble()|>
-    group_by(era)|>
-    mutate(distance=abs(surv-.5))|>
-    slice_min(distance, n=1, with_ties = FALSE)|>
-    mutate(median_time_to_complete_in_months=if_else(distance>.1, NA_real_, time))|>
-    select(era, median_time_to_complete_in_months)
-}
+# get_yearly <- function(tbbl){
+#   tbbl|>
+#     filter(time %in% seq(12,240, 12))|>
+#     mutate(years_since_registration=time/12,
+#            proportion_complete=1-surv)|>
+#     as_tibble()|>
+#     select(era, years_since_registration, proportion_complete)
+# }
+# get_median <- function(tbbl){
+#   tbbl|>
+#     as_tibble()|>
+#     group_by(era)|>
+#     mutate(distance=abs(surv-.5))|>
+#     slice_min(distance, n=1, with_ties = FALSE)|>
+#     mutate(median_time_to_complete_in_months=if_else(distance>.1, NA_real_, time))|>
+#     select(era, median_time_to_complete_in_months)
+# }
 
+get_mean_delay <- function(tbbl){
+  tbbl|>
+    mutate(joint_sum_to_one=joint/sum(joint))|>
+    summarize(mean_delay_year=sum(time*joint_sum_to_one)/12)|>
+    pull(mean_delay_year)
+}
 
 # get the data, clean it up-----------------------------------
 
@@ -216,22 +222,22 @@ survival <- reg_and_complete |>
     km_split_model = map(data, survfit_split),
     surv_dat = map(km_model, get_joint),
     split_data = map(km_split_model, split_data),
-    yearly_split = map(split_data, get_yearly),
-    median_delay = map(split_data, get_median),
-    km_prob_complete = map_dbl(surv_dat, function(x) 1-min(x$surv))
+    `What is the mean duration of a successful apprenticeship` = map_dbl(surv_dat, get_mean_delay),
+    `What is the probability of completion?` = map_dbl(surv_dat, function(x) 1-min(x$surv))
   )|>
-  arrange(km_prob_complete)
+  arrange(`What is the probability of completion?`)
 
 #write some key findings to disk-------------------------------
 survival|>
-  select(trade_desc, yearly_split)|>
-  unnest(yearly_split)|>
-  write_csv(here("out","apprentice_completion_rates_annual.csv"))
-
-survival|>
-  select(trade_desc, median_delay)|>
-  unnest(median_delay)|>
-  write_csv(here("out","median_time_to_complete_in_months.csv"))
+  select(trade_desc,
+         `What is the mean duration of a successful apprenticeship`,
+         `What is the probability of completion?`)|>
+  write_csv(here("out","trades_prob_complete_and_mean_duration.csv"))
+#
+# survival|>
+#   select(trade_desc, median_delay, km_prob_complete)|>
+#   unnest(median_delay)|>
+#   write_csv(here("out","median_time_to_complete_in_months.csv"))
 
 # the time series of arrivals (new registrants at risk of completion)--------------------------------
 observed_at_risk <- reg_and_complete |>
@@ -283,7 +289,11 @@ actual_plus_forecast <- observed_complete|>
   rename(value=observed_complete,
          date=end_date)|>
   bind_rows(forecasts)|>
-  arrange(trade_desc, date)|>
+  arrange(trade_desc, date)
+
+#write_csv(actual_plus_forecast, here("out","actual_plus_forecast_jackie.csv"))
+
+actual_plus_forecast <- actual_plus_forecast|>
   group_by(trade_desc)|>
   nest()|>
   mutate(plot=map2(data, trade_desc, fcast_plot, "Monthly Apprentice Completions"))
