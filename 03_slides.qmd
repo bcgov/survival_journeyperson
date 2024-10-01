@@ -115,7 +115,7 @@ tbbl|>
 -   that only Automotive Service Technicians suffer from congestion?
 
 
-```{r, fig.retina=2}
+```{r, fig.retina=2, fig.width=10}
 plt <- ggplot(mapping=aes(completion_cor, 
                               delay_cor, 
                               text=paste0(
@@ -275,7 +275,7 @@ animate(p, renderer = gifski_renderer())
 #| column: page
 plt <- survival|>
     filter(trade_desc=="Powerline Technician")|>
-    mutate(km_plot = pmap(list(km_model, data, trade_desc), my_survplot))
+    mutate(km_plot = pmap(list(km_model_last8, data, trade_desc), my_survplot))
 plt$km_plot[[1]]
 
 joint <- survival|>
@@ -298,7 +298,7 @@ ggplot(joint[[1]], aes(time, joint))+
 #| column: page
 plt <- survival|>
     filter(trade_desc=="Plumber")|>
-    mutate(km_plot = pmap(list(km_model, data, trade_desc), my_survplot))
+    mutate(km_plot = pmap(list(km_model_last8, data, trade_desc), my_survplot))
 plt$km_plot[[1]]
 
 joint <- survival|>

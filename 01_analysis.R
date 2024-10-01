@@ -36,7 +36,7 @@ get_cor <- function(tbbl, var){
   with(tbbl, cor(cohort_size, get(var), use = "pairwise.complete.obs"))
 }
 
-get_stats <- function(tbbl){
+get_stats <- function(tbbl){#for congestion effect analysis
   size_and_prop <- tbbl|>
     group_by(start_date)|>
     summarize(cohort_size=n(),
@@ -50,11 +50,11 @@ get_stats <- function(tbbl){
   full_join(size_and_prop, delay)
 }
 
-complete_wrapper <- function(surv_dat, at_risk) {#at_risk is the historical+ets forecast of new registrations tibble
+complete_wrapper <- function(last8dat, at_risk) {#at_risk is the historical+ets forecast of new registrations tibble
   complete <- function(start_date, new_regs) {
     tibble(
-      complete_date = yearmonth(ym(start_date) + months(surv_dat$time)),
-      expected_complete = new_regs * surv_dat$joint
+      complete_date = yearmonth(ym(start_date) + months(last8dat$time)),
+      expected_complete = new_regs * last8dat$joint
     )
   }
   at_risk |>
@@ -72,8 +72,10 @@ tidy_up <- function(tbbl) {
     filter(complete_date > start & complete_date <= end)
 }
 
-survfit_constant <- function(tbbl) {
-  survfit(Surv(time, completed) ~ 1, tbbl|>filter(era=="last 8 years")) #try using most recent data only
+survfit_part <- function(tbbl, which_era) {
+  tbbl <- tbbl|>
+    filter(era %in% which_era)
+ if (nrow(tbbl) > 10) stop("too little data") else survfit(Surv(time, completed) ~ 1, tbbl)
 }
 survfit_split <- function(tbbl) {
   survfit(Surv(time, completed) ~ era, tbbl)
@@ -124,29 +126,24 @@ split_data <- function(mod_list){
     tidyr::fill(surv, .direction = "down")
 }
 
-# get_yearly <- function(tbbl){
-#   tbbl|>
-#     filter(time %in% seq(12,240, 12))|>
-#     mutate(years_since_registration=time/12,
-#            proportion_complete=1-surv)|>
-#     as_tibble()|>
-#     select(era, years_since_registration, proportion_complete)
-# }
-# get_median <- function(tbbl){
-#   tbbl|>
-#     as_tibble()|>
-#     group_by(era)|>
-#     mutate(distance=abs(surv-.5))|>
-#     slice_min(distance, n=1, with_ties = FALSE)|>
-#     mutate(median_time_to_complete_in_months=if_else(distance>.1, NA_real_, time))|>
-#     select(era, median_time_to_complete_in_months)
-# }
-
 get_mean_delay <- function(tbbl){
   tbbl|>
     mutate(joint_sum_to_one=joint/sum(joint))|>
     summarize(mean_delay_year=sum(time*joint_sum_to_one)/12)|>
     pull(mean_delay_year)
+}
+
+get_trade_counts <- function(the_trade){
+  ids <- complete|>
+    filter(trade_desc==the_trade)|>
+    distinct(unique_key)|>
+    pull(unique_key)
+
+  filtered <- complete|>
+    filter(unique_key %in% ids)|>
+    group_by(unique_key)|>
+    summarize(number_of_trades=n())|>
+    tabyl(number_of_trades)
 }
 
 # get the data, clean it up-----------------------------------
@@ -162,7 +159,7 @@ reg_and_complete <- read_excel(here("data", "Completion App Data.xlsx"),
   mutate(registration_end_date=as.character(registration_end_date),
          registration_end_date=if_else(registration_status_desc=="DEREG", NA_character_, registration_end_date), #DEREGs should be missing date of completion
          registration_end_date=ymd(registration_end_date))|>
-  select(start_date=registration_start_date, end_date=registration_end_date, trade_desc) |>
+  select(registration_status_desc, unique_key, start_date=registration_start_date, end_date=registration_end_date, trade_desc) |>
   mutate(
     start_date = tsibble::yearmonth(lubridate::ymd(start_date)),
     end_date = tsibble::yearmonth(lubridate::ymd(end_date)),
@@ -171,7 +168,25 @@ reg_and_complete <- read_excel(here("data", "Completion App Data.xlsx"),
     time = if_else(is.na(end_date), last_observed - start_date, end_date - start_date)
   )
 
+#look at overlap across "pipe" trades...
 
+complete <- reg_and_complete|>
+  filter(registration_status_desc=="PRGCMP")
+
+pipe_trades <- tibble(trade_desc=c("Steamfitter/Pipefitter",
+                           "Gasfitter (Class A)",
+                           "Gasfitter - Class B",
+                           "Plumber"))|>
+  mutate(trade_counts=map(trade_desc, get_trade_counts))|>
+  unnest(trade_counts)|>
+  group_by(trade_desc)|>
+  mutate(percent_over_number_of_trades=percent/number_of_trades,
+         sum_percent_over_number_of_trades=sum(percent_over_number_of_trades))
+
+pipe_trades|>
+  write_csv(here("out","pipe_trades.csv"))
+
+##################################
 largest <- tibble(trade_desc=table(reg_and_complete$trade_desc)|>sort()|>tail(n=largest_trades)|>names())
 additional <- tibble(trade_desc=c("Lather (Interior Systems Mechanic) (Wall & Ceiling Installer)",
                                   "Drywall Finisher"))#,
@@ -218,12 +233,24 @@ survival <- reg_and_complete |>
   group_by(trade_desc) |>
   nest()|>
   mutate(
-    km_model = map(data, survfit_constant),
+    km_first_8 = map(data, safely(survfit_part), "first 8 years"))
+
+
+
+
+
+,
+    km_middle_8 = map(data, survfit_part, "middle 8 years"),
+    km_last_8 = map(data, survfit_part, "last 8 years"),
+    km_all = map(data, survfit_part, c("first 8 years", "middle 8 years", "last 8 years")),
     km_split_model = map(data, survfit_split),
-    surv_dat = map(km_model, get_joint),
+    first8dat = map(km_first_8, get_joint),
+    middle8dat = map(km_middle_8, get_joint),
+    last8dat = map(km_last_8, get_joint),
+    alldat =  map(km_all, get_joint),
     split_data = map(km_split_model, split_data),
-    `What is the mean duration of a successful apprenticeship` = map_dbl(surv_dat, get_mean_delay),
-    `What is the probability of completion?` = map_dbl(surv_dat, function(x) 1-min(x$surv))
+    `What is the mean duration of a successful apprenticeship` = map_dbl(last8dat, get_mean_delay),
+    `What is the probability of completion?` = map_dbl(last8dat, function(x) 1-min(x$surv))
   )|>
   arrange(`What is the probability of completion?`)
 
@@ -233,11 +260,6 @@ survival|>
          `What is the mean duration of a successful apprenticeship`,
          `What is the probability of completion?`)|>
   write_csv(here("out","trades_prob_complete_and_mean_duration.csv"))
-#
-# survival|>
-#   select(trade_desc, median_delay, km_prob_complete)|>
-#   unnest(median_delay)|>
-#   write_csv(here("out","median_time_to_complete_in_months.csv"))
 
 # the time series of arrivals (new registrants at risk of completion)--------------------------------
 observed_at_risk <- reg_and_complete |>
@@ -270,9 +292,9 @@ at_risk <- ets_fcast |>
 # all data applies joint probabilities of "death" to historical+forecast at risk(i.e. forecasts AND backcasts)
 f_and_b_cast <- survival |>
   semi_join(ets_fit|>tibble()|>select(trade_desc))|> #only the series we fit models to
-  select(trade_desc, surv_dat)|>
+  select(trade_desc, last8dat)|>
   full_join(at_risk)|>
-  mutate(complete = map2(surv_dat, at_risk_data, complete_wrapper))|>
+  mutate(complete = map2(last8dat, at_risk_data, complete_wrapper))|>
   select(trade_desc, complete) |> #complete is itself a nested tibble (tibble f_and_b_cast is double nested.)
   mutate(complete = map(complete, tidy_up)) |> #unnests the lowest level and aggregates by end_date
   unnest(complete)
@@ -290,8 +312,6 @@ actual_plus_forecast <- observed_complete|>
          date=end_date)|>
   bind_rows(forecasts)|>
   arrange(trade_desc, date)
-
-#write_csv(actual_plus_forecast, here("out","actual_plus_forecast_jackie.csv"))
 
 actual_plus_forecast <- actual_plus_forecast|>
   group_by(trade_desc)|>
@@ -325,7 +345,7 @@ observed_vs_backcast <- observed_complete|>
 #write data to disk---------------------------
 
 survival|>
-  select(trade_desc, surv_dat, km_model, km_split_model, data)|>
+  select(trade_desc, last8dat, km_last_8, km_split_model, data)|>
   write_rds(here("out","survival.rds"))
 
 observed_vs_backcast|>
