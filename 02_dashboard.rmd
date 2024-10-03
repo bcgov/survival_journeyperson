@@ -79,7 +79,7 @@ Thumbs and Eyes
 Inputs {.sidebar data-width=400}
 -------------------------------------
 
-* This initial page gives a broad overview of whether or not there will be enough new journeypersons and apprentices to meet demand.
+* This initial page gives a broad overview of whether or not there will be enough new journey-persons and apprentices to meet demand.
 * A green thumbs up indicates there will likely be a surplus.
 * A red thumbs down indicates there will likely be a shortage.
 * An orange eye indicates we should probably keep an eye on the situation. 
@@ -228,12 +228,12 @@ Apprentice Completions vs. Job Openings
 Inputs {.sidebar data-width=250}
 -------------------------------------
 
-### Are we producing enough journeypersons to meet demand?
+### Are we producing enough journey-persons to meet demand?
 
-* Supply of Journeypersons is the forecast of apprentice completions.
-* Demand for journeypersons is assumed to be twice LMO replacement demand plus 1/3 of LMO expansion demand.
-* Regarding replacement demand, we assume that for every retirement or death there is another journeyperson that leaves the trade prematurely.
-* Regarding expansion demand, the desired ratio of journeyperson to apprentice is 1:2.
+* Supply of journey-persons is the forecast of apprentice completions.
+* Demand for journey-persons is assumed to be twice LMO replacement demand plus 1/3 of LMO expansion demand.
+* Regarding replacement demand, we assume that for every retirement or death there is another journey-person that leaves the trade prematurely.
+* Regarding expansion demand, the desired ratio of journey-person to apprentice is 1:2.
 * Note that there is a many-to-one relationship between trades and occupations. 
 
 
@@ -265,7 +265,7 @@ Inputs {.sidebar data-width=250}
 ### Are there enough new apprentices to meet demand?
 
 * Supply of apprentices is the forecast of new registrations. 
-* The demand for apprentices is assumed to be twice that of new journeypersons: the desired ratio is 2:1.
+* The demand for apprentices is assumed to be twice that of new journey-persons: the desired ratio is 2:1.
 * Note that there is a many-to-one relationship between trades and occupations. 
 
 Column

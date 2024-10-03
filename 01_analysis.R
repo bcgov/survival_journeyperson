@@ -1,4 +1,4 @@
-#' This script produces a 5 year forecast for STC (plus some others) apprenticeship completion using survival analysis.
+#' This script produces a 10 year forecast for STC (plus some others) apprenticeship completion using survival analysis.
 #' Using the terminology of survival analysis, an individual who registers for apprenticeship is "at risk"
 #' of completing their apprenticeship a.k.a. "Death".
 #'
@@ -13,30 +13,43 @@
 #'
 #' These joint probabilities are applied to the "at risk" population (both historic and forecast) yielding the
 #' apprenticeship completion forecast.
-
 library(tidyverse)
 library(survival)
 library(ggfortify)
 library(janitor)
 library(readxl)
 library(here)
-library(lubridate)
 library(fpp3)
 library(patchwork)
 library(conflicted)
 conflicts_prefer(dplyr::filter)
-largest_trades <- 20
-fcast_start <- 2025
+largest_trades <- 20 #we consider STC plus some other large trades
+fcast_start <- 2025 #this needs to be incremented
 fcast_end <- fcast_start+9
 fcast_range <- fcast_start:fcast_end
 fcast_horizon <- 180 #longer than needed
 font_size <- 15
+#functions------------------------------
+get_trade_counts <- function(the_trade){
+  #' gets the ids of each person who completed for the trade, counts the number of trades completed, then tables counts.
+  ids <- complete|>
+    filter(trade_desc==the_trade)|>
+    distinct(unique_key)|>
+    pull(unique_key)
 
+  filtered <- complete|>
+    filter(unique_key %in% ids)|>
+    group_by(unique_key)|>
+    summarize(number_of_trades=n())|>
+    tabyl(number_of_trades)
+}
 get_cor <- function(tbbl, var){
+  #' A wrapper for calculating the correlation between cohort size and measures of performance.
   with(tbbl, cor(cohort_size, get(var), use = "pairwise.complete.obs"))
 }
-
 get_stats <- function(tbbl){
+  #' Calculates cohort size, the proportion of registrants who completed, and the mean interval length
+  #' between date of registration and date of completion.
   size_and_prop <- tbbl|>
     group_by(start_date)|>
     summarize(cohort_size=n(),
@@ -46,11 +59,11 @@ get_stats <- function(tbbl){
     filter(completed==1)|>
     group_by(start_date)|>
     summarise(mean_delay=mean(time, na.rm = TRUE))
-
   full_join(size_and_prop, delay)
 }
 
-complete_wrapper <- function(surv_dat, at_risk) {#at_risk is the historical+ets forecast of new registrations tibble
+complete_wrapper <- function(surv_dat, at_risk) {
+  #this function applies the joint probability of completion to the stream of at_risk (historical+forecast new_regs)
   complete <- function(start_date, new_regs) {
     tibble(
       complete_date = yearmonth(ym(start_date) + months(surv_dat$time)),
@@ -73,7 +86,7 @@ tidy_up <- function(tbbl) {
 }
 
 survfit_last8 <- function(tbbl) {
-  survfit(Surv(time, completed) ~ 1, tbbl|>filter(era=="last 8 years")) #try using most recent data only
+  survfit(Surv(time, completed) ~ 1, tbbl|>filter(era=="last 8 years")) #most recent data only
 }
 survfit_all <- function(tbbl) {
   survfit(Surv(time, completed) ~ 1, tbbl)
@@ -82,6 +95,7 @@ survfit_split <- function(tbbl) {
   survfit(Surv(time, completed) ~ era, tbbl)
 }
 get_joint <- function(mod_lst) {
+  # calculate the joint probability of survival thus far and completion now: P(S and C)= P(S)*P(C|S)
   tibble(
     haz_rate = c(diff(mod_lst$cumhaz), 0),
     surv = mod_lst$surv,
@@ -112,13 +126,8 @@ obs_vs_back_plot <- function(tbbl, name){
     theme(text=element_text(size=font_size))
 }
 
-get_closest <- function(desired_value, actual_values){
-  keep <- which.min(abs(desired_value-actual_values))
-  actual_values[keep]
-}
-
 split_data <- function(mod_list){
-  #browser()
+  #takes survival model list, and creates a tsibble with the relevant info
   temp <- tibble(era=rep(names(mod_list[["strata"]]), times=mod_list[["strata"]]),
          surv=mod_list[["surv"]],
          time=mod_list[["time"]])|>
@@ -128,86 +137,56 @@ split_data <- function(mod_list){
     tidyr::fill(surv, .direction = "down")
 }
 
-# get_yearly <- function(tbbl){
-#   tbbl|>
-#     filter(time %in% seq(12,240, 12))|>
-#     mutate(years_since_registration=time/12,
-#            proportion_complete=1-surv)|>
-#     as_tibble()|>
-#     select(era, years_since_registration, proportion_complete)
-# }
-# get_median <- function(tbbl){
-#   tbbl|>
-#     as_tibble()|>
-#     group_by(era)|>
-#     mutate(distance=abs(surv-.5))|>
-#     slice_min(distance, n=1, with_ties = FALSE)|>
-#     mutate(median_time_to_complete_in_months=if_else(distance>.1, NA_real_, time))|>
-#     select(era, median_time_to_complete_in_months)
-# }
-
 get_mean_delay <- function(tbbl){
+  # conditional on completion, how long (on average) does it take to complete
   tbbl|>
-    mutate(joint_sum_to_one=joint/sum(joint))|>
+    mutate(joint_sum_to_one=joint/sum(joint))|> #adjust probabilities for non-completions.
     summarize(mean_delay_year=sum(time*joint_sum_to_one)/12)|>
     pull(mean_delay_year)
 }
 
 # get the data, clean it up-----------------------------------
 
-stc<- read_csv(here("out","trade_noc_mapping.csv"))|>
-  filter(STC_Trades=="Y")|>
-  select(trade_desc=Trade)
-
 reg_and_complete <- read_excel(here("data", "Completion App Data.xlsx"),
                                sheet = "Sheet1",
                                na = "NULL") |>
   clean_names()|>
-  mutate(registration_end_date=as.character(registration_end_date),
+  mutate(registration_end_date=as.character(registration_end_date), #because we need to overwrite dates with NAs below (there is no NA_date_ in R)
          registration_end_date=if_else(registration_status_desc=="DEREG", NA_character_, registration_end_date), #DEREGs should be missing date of completion
-         registration_end_date=ymd(registration_end_date))|>
-  select(start_date=registration_start_date, end_date=registration_end_date, trade_desc) |>
+         registration_end_date=ymd(registration_end_date))|> #convert it back to a date
+  select(unique_key, registration_status_desc, start_date=registration_start_date, end_date=registration_end_date, trade_desc) |>
   mutate(
-    start_date = tsibble::yearmonth(lubridate::ymd(start_date)),
-    end_date = tsibble::yearmonth(lubridate::ymd(end_date)),
+    start_date = tsibble::yearmonth(ymd(start_date)),
+    end_date = tsibble::yearmonth(ymd(end_date)),
     last_observed = tsibble::yearmonth(max(start_date, na.rm = TRUE)), # not clear when observation ended... using this as proxy.
     completed = if_else(is.na(end_date), 0, 1),
     time = if_else(is.na(end_date), last_observed - start_date, end_date - start_date)
   )
 
+#only look at the largest, stc and a couple additional trades-------------------------------------
 
-largest <- tibble(trade_desc=table(reg_and_complete$trade_desc)|>sort()|>tail(n=largest_trades)|>names())
-additional <- tibble(trade_desc=c("Lather (Interior Systems Mechanic) (Wall & Ceiling Installer)",
-                                  "Drywall Finisher"))#,
-                     #              "Cook",
-                     #              "Piledriver And Bridgeworker",
-                     #              "Asphalt Paving/Laydown Technician",
-                     #              "Residential Steep Roofer")
-                     # )
-                     #these additional trades feed into occupations shared by the largest and stc trades... but very uncommon.
-stc_plus <- full_join(stc, largest)|>
-  full_join(additional)
+largest <- reg_and_complete|>
+  tabyl(trade_desc)|>
+  slice_max(n, n=20)|>
+  pull(trade_desc)
+
+#additional trades that feed into the same NOCs that largest and STC trades feed into.
+additional <- c("Lather (Interior Systems Mechanic) (Wall & Ceiling Installer)",
+                                  "Drywall Finisher")
+
+stc<- read_csv(here("out","trade_noc_mapping.csv"))|>
+  filter(STC_Trades=="Y")|>
+  pull(Trade)
+
+keep_these_trades <- unique(c(largest, additional, stc))
 
 reg_and_complete <-reg_and_complete|>
-  semi_join(stc_plus)|>
-  filter(end_date > start_date | is.na(end_date)) # sanity check: cant end before you start
-
-# are there congestion effects?
-
-reg_and_complete|>
-  filter(start_date<today()-years(5))|> #gives a reasonable amount of time to complete.
-  group_by(trade_desc)|>
-  nest()|>
-  mutate(stats=map(data, get_stats))|>
-  mutate(completion_cor=map_dbl(stats, get_cor, "prop_complete"),
-         delay_cor=map_dbl(stats, get_cor, "mean_delay")
-         )|>
-  select(-data, -stats)|>
-  write_rds(here("out", "congestion.rds"))
+  filter(trade_desc %in% keep_these_trades,
+         end_date > start_date | is.na(end_date)) # sanity check: cant end before you start
 
 #the historical time series of completions-------------------------------
 observed_complete <- reg_and_complete |>
-  filter(!is.na(end_date)) |>
+  filter(!is.na(end_date))|>
   group_by(trade_desc, end_date) |>
   summarize(observed_complete = n()) |>
   as_tsibble(key=trade_desc, index = end_date)|>
@@ -216,8 +195,8 @@ observed_complete <- reg_and_complete |>
   arrange(trade_desc, end_date)
 # do the survival analysis--------------------------
 survival <- reg_and_complete |>
-  mutate(era=case_when(start_date<ym(min(start_date))+years(8)~"first 8 years",
-                          start_date>ym(last_observed)-years(8)~"last 8 years",
+  mutate(era=case_when(start_date<yearmonth(ym(min(start_date))+years(8))~"first 8 years",
+                          start_date>yearmonth(ym(last_observed)-years(8))~"last 8 years",
                           TRUE ~ "middle 8 years"))|>
   group_by(trade_desc) |>
   nest()|>
@@ -233,15 +212,13 @@ survival <- reg_and_complete |>
   )|>
   arrange(`What is the probability of completion?`)
 
-#survival by era---------------------------
+#write key findings to disk---------------------------
 
 survival|>
   select(trade_desc, split_data)|>
   mutate(split_data=map(split_data, tibble))|>
   unnest(split_data)|>
   openxlsx::write.xlsx(here("out","survival_rates_by_trade_and_era.xlsx"))
-
-# survival all data---------------------------------------
 
 survival|>
   select(trade_desc, surv_dat_all)|>
@@ -250,8 +227,6 @@ survival|>
   mutate(era="All 24 years")|>
   openxlsx::write.xlsx(here("out","survival_rates_by_trade.xlsx"))
 
-
-#write some key findings to disk-------------------------------
 survival|>
   select(trade_desc,
          `What is the mean duration of a successful apprenticeship`,
@@ -272,10 +247,12 @@ observed_at_risk <- reg_and_complete |>
   select(-max_start)|>
   as_tsibble(key = trade_desc, index = start_date)
 
+#fit the models----------------------------------
 ets_fit <- observed_at_risk |>
   model(ets_model = ETS(new_regs~trend("Ad")+error("A")))|>
   filter(!is_null_model(ets_model))
 
+#forecast the models--------------------------------------
 ets_fcast <- ets_fit |>
   forecast(h = fcast_horizon)
 
@@ -284,12 +261,12 @@ at_risk <- ets_fcast |>
   tibble()|>
   select(start_date, trade_desc, new_regs = .mean)|>
   bind_rows(observed_at_risk)|>
-  filter(start_date<=yearmonth(paste(fcast_end,"/12")))|>
+  filter(start_date<=yearmonth(paste(fcast_end,"/12")))|> #trims the ets_fcast down to LMO forecast horizon.
   nest(at_risk_data=c(start_date, new_regs))
 
-# all data applies joint probabilities of "death" to historical+forecast at risk(i.e. forecasts AND backcasts)
+# applies joint probabilities of "death" to historical+forecast at risk(i.e. forecasts AND backcasts)
 f_and_b_cast <- survival |>
-  semi_join(ets_fit|>tibble()|>select(trade_desc))|> #only the series we fit models to
+  semi_join(ets_fit|>tibble()|>select(trade_desc))|> #only the series we were actually able tofit models to
   select(trade_desc, surv_dat)|>
   full_join(at_risk)|>
   mutate(complete = map2(surv_dat, at_risk_data, complete_wrapper))|>
@@ -310,8 +287,6 @@ actual_plus_forecast <- observed_complete|>
          date=end_date)|>
   bind_rows(forecasts)|>
   arrange(trade_desc, date)
-
-#write_csv(actual_plus_forecast, here("out","actual_plus_forecast_jackie.csv"))
 
 actual_plus_forecast <- actual_plus_forecast|>
   group_by(trade_desc)|>
@@ -373,6 +348,22 @@ by_trade_completions <- actual_plus_forecast|>
 
 write_csv(by_trade_completions, here("out","annual_apprentice_completion_forecast.csv"))
 
+#deflate to account for double/triple/quadruple counting (one person can do multiple trades, but can only work one job)
+
+complete <- reg_and_complete|>
+  filter(registration_status_desc=="PRGCMP")
+
+deflation_factors <- tibble(trade_desc=survival$trade_desc)|>
+  mutate(trade_counts=map(trade_desc, get_trade_counts))|>
+  unnest(trade_counts)|>
+  group_by(trade_desc)|>
+  mutate(percent_over_number_of_trades=percent/number_of_trades)|>
+  summarize(multiply_supply_by=sum(percent_over_number_of_trades))
+
+deflated_completions <- full_join(by_trade_completions, deflation_factors)|>
+  mutate(apprentice_completion_fcast=apprentice_completion_fcast*multiply_supply_by)|>
+  select(trade_desc, year, apprentice_completion_fcast)
+
 #start and end dates for shading plots--------------------------------
 tibble(x0 = as.integer(ym(reg_and_complete$last_observed[1])),
        x1 = as.integer(ym(paste(fcast_end,"/12"))))|>
@@ -384,14 +375,17 @@ mapping <- read_csv(here("out","trade_noc_mapping.csv"))|>
   select(-STC_Trades)|>
   rename(trade_desc=Trade)
 
-by_noc_completions <- by_trade_completions|>
+by_noc_completions <- deflated_completions|>
   inner_join(mapping)|>
   group_by(year, NOC_Code_2021, NOC_2021)|>
   summarize(apprentice_completions=sum(apprentice_completion_fcast))
 
 new_reg_forecast <- at_risk|>
-  inner_join(mapping)|>
   unnest(at_risk_data)|>
+  full_join(deflation_factors)|> #deflate the new reg forecast by factor to compensate for double/triple/quad counting
+  mutate(new_regs=new_regs*multiply_supply_by)|>
+  select(-multiply_supply_by)|>
+  inner_join(mapping)|>
   mutate(start_date=year(ym(start_date)))|>
   group_by(year=start_date, NOC_Code_2021, NOC_2021)|>
   summarize(apprentice_new_reg=sum(new_regs))
@@ -426,12 +420,23 @@ full_join(new_reg_forecast, demand)|>
   select(-journeyperson_demand)|>
   rename(demand=apprentice_demand,
          supply=apprentice_new_reg)|>
-  na.omit()|>
+  na.omit()|> #keeps only the forecast part
   pivot_longer(cols=c(demand, supply), names_to = "series", values_to = "value")|>
   write_rds(here("out","new_regs_vs_demand.rds"))
 
 
+# are there congestion effects?
 
+reg_and_complete|>
+  filter(start_date<yearmonth(today()-years(5)))|> #gives a reasonable amount of time to complete.
+  group_by(trade_desc)|>
+  nest()|>
+  mutate(stats=map(data, get_stats))|>
+  mutate(completion_cor=map_dbl(stats, get_cor, "prop_complete"),
+         delay_cor=map_dbl(stats, get_cor, "mean_delay")
+  )|>
+  select(-data, -stats)|>
+  write_rds(here("out", "congestion.rds"))
 
 
 
