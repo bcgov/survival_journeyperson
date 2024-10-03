@@ -23,7 +23,7 @@ library(fpp3)
 library(patchwork)
 library(conflicted)
 conflicts_prefer(dplyr::filter)
-#constants-----------------------------------
+#constants------------------------------------
 largest_trades <- 20 #we consider STC plus some other large trades
 fcast_start <- 2025 #this needs to be incremented
 fcast_end <- fcast_start+9
