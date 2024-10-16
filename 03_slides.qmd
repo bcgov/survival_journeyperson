@@ -50,11 +50,17 @@ congestion <- read_rds(here("out","congestion.rds"))
 ## What would be your forecast of this monthly time series?
 
 ```{r}
-dates <- seq.Date(today()-years(10), today(), by = "month")
-`Apprentice Completions` <- round(50+10*rnorm(length(dates)))
-flat_registrations <- c(100+10*rnorm(length(dates)-24))
-increasing_registrations <- 100*1.025^(1:24)+10*rnorm(24)
-tbbl <- tibble(dates, `Apprentice Completions`, `New Registrations`=round(c(flat_registrations, increasing_registrations)))
+reg_dates <- seq.Date(today()-years(10), today(), by = "month")
+flat_registrations <- c(100+10*rnorm(length(reg_dates)-24))
+increasing_registrations <- 100*1.03^(1:24)+10*rnorm(24)
+tbbl <- tibble(reg_dates, `New Registrations`=round(c(flat_registrations, increasing_registrations)))|>
+  mutate(`Apprentice Completions`=.5*`New Registrations`,
+         comp_dates=reg_dates+months(24))
+
+tbbl <- inner_join(tbbl|>select(reg_dates, `New Registrations`), 
+                   tbbl|>select(comp_dates, `Apprentice Completions`), by=c("reg_dates"="comp_dates"))|>
+  rename(dates=reg_dates)
+
 
 tbbl|>
   ggplot(aes(dates, `Apprentice Completions`, colour="Apprentice Completions"))+
@@ -110,12 +116,9 @@ tbbl|>
 -   i.e. "production" scales up/down with the arrival rate of registrants, without changes in attrition or delay (no congestion effects). 
 -   If true,  we can use new registrants as a leading indicator of apprentice completions.
 
-## Isn't it ironic...
+## No real indication of congestion...
 
--   that only Automotive Service Technicians suffer from congestion?
-
-
-```{r, fig.retina=2, fig.width=10}
+```{r, fig.retina=2, fig.height=6}
 plt <- ggplot(mapping=aes(completion_cor, 
                               delay_cor, 
                               text=paste0(
@@ -129,7 +132,7 @@ plt <- ggplot(mapping=aes(completion_cor,
               )+
   geom_vline(xintercept = 0, colour="white", lwd=1.5)+
   geom_hline(yintercept = 0, colour="white", lwd=1.5)+
-  geom_point(data=congestion|>filter(completion_cor<.4, delay_cor>.4), colour="red", size = 3)+
+  geom_point(data=congestion|>filter(completion_cor < -.5, delay_cor > .5), colour="red", size = 3)+
   geom_point(data=congestion)+
   labs(x="cor(cohort size, probability of completion)",
        y="cor(cohort size, time to completion")+
@@ -148,9 +151,6 @@ plt <- ggplot(mapping=aes(completion_cor,
   margin = list(t = 100)  # Add margin to prevent overlap
 )
 ```
-
-
-
 
 ## A simple forecast based on registrations:
 

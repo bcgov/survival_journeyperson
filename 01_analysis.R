@@ -52,14 +52,15 @@ get_stats <- function(tbbl){
   #' Calculates cohort size, the proportion of registrants who completed, and the mean interval length
   #' between date of registration and date of completion.
   size_and_prop <- tbbl|>
-    group_by(start_date)|>
+    group_by(floor_date(ym(start_date), unit="year"))|>
     summarize(cohort_size=n(),
               prop_complete=sum(completed)/n()
     )
   delay <- tbbl|>
     filter(completed==1)|>
-    group_by(start_date)|>
+    group_by(floor_date(ym(start_date), unit="year"))|>
     summarise(mean_delay=mean(time, na.rm = TRUE))
+#  browser()
   full_join(size_and_prop, delay)
 }
 
@@ -218,7 +219,7 @@ survival <- reg_and_complete |>
 survival|>
   select(trade_desc, split_data)|>
   mutate(split_data=map(split_data, tibble))|>
-  unnest(split_data)|>
+  unnest(split_data)|>#view()
   openxlsx::write.xlsx(here("out","survival_rates_by_trade_and_era.xlsx"))
 
 survival|>
@@ -231,7 +232,7 @@ survival|>
 survival|>
   select(trade_desc,
          `What is the mean duration of a successful apprenticeship`,
-         `What is the probability of completion?`)|>
+         `What is the probability of completion?`)|>#view()
   write_csv(here("out","trades_prob_complete_and_mean_duration.csv"))
 
 
@@ -267,7 +268,7 @@ at_risk <- ets_fcast |>
 
 # applies joint probabilities of "death" to historical+forecast at risk(i.e. forecasts AND backcasts)
 f_and_b_cast <- survival |>
-  semi_join(ets_fit|>tibble()|>select(trade_desc))|> #only the series we were actually able tofit models to
+  semi_join(ets_fit|>tibble()|>select(trade_desc))|> #only the series we were actually able to fit models to
   select(trade_desc, surv_dat)|>
   full_join(at_risk)|>
   mutate(complete = map2(surv_dat, at_risk_data, complete_wrapper))|>
@@ -429,7 +430,7 @@ full_join(new_reg_forecast, demand)|>
 # are there congestion effects?
 
 reg_and_complete|>
-  filter(start_date<yearmonth(today()-years(5)))|> #gives a reasonable amount of time to complete.
+  filter(ym(start_date)<floor_date(today()-years(5), unit = "year"))|> #gives a reasonable amount of time to complete.
   group_by(trade_desc)|>
   nest()|>
   mutate(stats=map(data, get_stats))|>
