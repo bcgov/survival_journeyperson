@@ -29,7 +29,7 @@ fcast_start <- 2025 #this needs to be incremented
 fcast_end <- fcast_start+9
 fcast_range <- fcast_start:fcast_end
 fcast_horizon <- 180 #longer than needed
-font_size <- 15
+font_size <- 10
 #functions------------------------------
 get_trade_counts <- function(the_trade){
   #' gets the ids of each person who completed for the trade, counts the number of trades completed, then tables counts.
@@ -96,14 +96,26 @@ survfit_all <- function(tbbl) {
 survfit_split <- function(tbbl) {
   survfit(Surv(time, completed) ~ era, tbbl)
 }
+
 get_joint <- function(mod_lst) {
   # calculate the joint probability of survival thus far and completion now: P(S and C)= P(S)*P(C|S)
+  # Data doesn't make sense in some cases (for our purposes)... code below fixes.
+  if(mod_lst$cumhaz[1]!=0 | mod_lst$surv[1]!=1){ #if survival curve doesn't start at surv=1...
+    mod_lst$cumhaz=c(0, mod_lst$cumhaz) #at time =0 cumulative hazard should be 0
+    mod_lst$surv=c(1, mod_lst$surv) #at time=0 the survival probability should be 1.
+    mod_lst$time=c(0, mod_lst$time) #at time=0 time should be... 0
+  }
+  cumhaz <- c(mod_lst$cumhaz, NA_real_)
+  surv <- c(1, mod_lst$surv) #pushes down surv by one row relative to cumhaz and time
+  time <- c(mod_lst$time, NA_real_)
+
   tibble(
-    haz_rate = c(diff(mod_lst$cumhaz), 0),
-    surv = mod_lst$surv,
-    time = mod_lst$time
+    haz_rate = c(0, diff(cumhaz)),
+    surv = surv,
+    time = time
   ) |>
-    mutate(joint = haz_rate * surv)
+    mutate(joint = haz_rate * surv)|>
+    na.omit()
 }
 
 fcast_plot <- function(tbbl, series, ylab){

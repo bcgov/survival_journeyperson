@@ -116,9 +116,11 @@ tbbl|>
 -   i.e. "production" scales up/down with the arrival rate of registrants, without changes in attrition or delay (no congestion effects). 
 -   If true,  we can use new registrants as a leading indicator of apprentice completions.
 
-## No real indication of congestion...
+## No real indication of (historic) congestion...
 
-```{r, fig.retina=2, fig.height=6}
+-   But there is some policy uncertainty going forward.
+
+```{r, fig.retina=2, fig.height=5}
 plt <- ggplot(mapping=aes(completion_cor, 
                               delay_cor, 
                               text=paste0(

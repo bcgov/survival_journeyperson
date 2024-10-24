@@ -22,13 +22,18 @@ library(plotly)
 library(formattable)
 conflicts_prefer(dplyr::filter)
 conflicts_prefer(formattable::style)
-font_size=18
+font_size=10
 my_survplot <- function(mod, dat, grp) {
   plt <- survminer::ggsurvplot(mod,
     dat,
-    pval = TRUE,
+    #pval = TRUE,
     censor = FALSE,
     conf.int = FALSE,
+    fun="event", 
+    #ylim = c(0, 1),
+    break.time.by=24,
+    lwd=.5,
+    xscale="m_y",
     ggtheme = theme_grey(),
     font.title=font_size,
     font.x=font_size,
@@ -38,8 +43,8 @@ my_survplot <- function(mod, dat, grp) {
   ) +
     labs(
       title = grp,
-      x = "Months since Registration",
-      y = "Survival Probability"
+      x = "Years since Registration",
+      y = "Probability of Completion"
     )
 }
 my_dt <- function(tbbl) {
@@ -140,12 +145,6 @@ Inputs {.sidebar data-width=400}
 * In this app we use survival analysis to uncover the dynamics governing the transition between registering for an apprenticeship and completion of apprenticeship: i.e. not everyone who registers completes, and the elapsed time between registration and completion varies across trade and time. 
 * Specifically, we forecast the arrival rate of new registrants using exponential smoothing, and then apply the joint probabilities of completion to the arrival rate to get the expected number of completions.
 
-### What makes a good forecast:
-
-1) A reasonable forecast of arrivals (the rate of arrival of new registrants is predictable)
-2) Survival curves that are stable over time: here we split the 24 years of completion data into 3 eras of 8 years each, in order to ascertain whether the transition dynamics are stable.
-3) Backcasts (applying the transition probabilities to historic new registrant arrival data) are close the observed values of completions.
-
 ```{r}
 selectInput(
   "trade",
@@ -154,6 +153,13 @@ selectInput(
   sort(survival$trade_desc)[1] 
 )
 ```
+
+
+### What makes a good forecast:
+
+1) A reasonable forecast of arrivals (the rate of arrival of new registrants is predictable)
+2) Survival curves that are stable over time: here we split the 24 years of completion data into 3 eras of 8 years each, in order to ascertain whether the transition dynamics are stable.
+3) Backcasts (applying the transition probabilities to historic new registrant arrival data) are close the observed values of completions.
 
 Column
 -------------------------------------
@@ -178,15 +184,16 @@ renderPlotly({
 })
 ```
     
-### Survival Curves
+### Completion Curves
 
 ```{r, fig.retina=2}
-renderPlot({
+renderPlotly({
   req(input$trade)
   plt <- survival|>
     filter(trade_desc==input$trade)|>
-    mutate(km_split_plot = pmap(list(km_split_model, data, trade_desc), my_survplot))
-  plt$km_split_plot
+    mutate(km_split_plot = pmap(list(km_split_model, data, trade_desc), my_survplot))|>
+    pull(km_split_plot)
+  ggplotly(plt[[1]][[1]], tooltip = "none")
 })
 ```
 
