@@ -1,10 +1,15 @@
 ---
-title: "Forecasting Apprentice Completions"
-subtitle: "... the goal is not survival"
-author: "Richard Martin"
+title: "<br><br>It's not the journey, man..."
+subtitle: "It's the apprenticeship"
+author:
+  - name: Richard Martin
 format: 
   revealjs:
     self-contained: true
+title-slide-attributes:
+  data-background-image: ralph.png
+  data-background-size: cover    
+css: styles.css
 ---
 
 ```{r}
@@ -14,8 +19,10 @@ library(conflicted)
 library(patchwork)
 library(here)
 library(gganimate)
+library(modelsummary)
+library(gt)
 conflicts_prefer(dplyr::filter)
-font_size=18
+font_size=25
 set.seed(1)
 #functions----------------------
 make_fcast <- function(reg_date, regs, tbbl){
@@ -47,111 +54,68 @@ survival <- read_rds(here("out","survival.rds"))
 congestion <- read_rds(here("out","congestion.rds"))
 ```
 
-## What would be your forecast of this monthly time series?
+## Introduction:
 
-```{r}
-reg_dates <- seq.Date(today()-years(10), today(), by = "month")
-flat_registrations <- c(100+10*rnorm(length(reg_dates)-24))
-increasing_registrations <- 100*1.03^(1:24)+10*rnorm(24)
-tbbl <- tibble(reg_dates, `New Registrations`=round(c(flat_registrations, increasing_registrations)))|>
-  mutate(`Apprentice Completions`=.5*`New Registrations`,
-         comp_dates=reg_dates+months(24))
+-   An apprenticeship is training in a trade that involves a combination of on-the-job training and technical training in the classroom (aka seats).
+-   The NDP have big plans:
+    -   "...committing \$1.5 billion to build 26,000 non-market housing units each year."
+    -   "... invest \$150 million over three years in SkilledTradesBC to double the trade apprentice seats from the current 26,000 to over 50,000."
 
-tbbl <- inner_join(tbbl|>select(reg_dates, `New Registrations`), 
-                   tbbl|>select(comp_dates, `Apprentice Completions`), by=c("reg_dates"="comp_dates"))|>
-  rename(dates=reg_dates)
+## Goals:
+
+1)  Use new apprenticeship registrations as a leading indicator for apprenticeship completions.
+
+2)  Look inside the "black box" of apprenticeship.
+
+    -   What technical training levels are associated with delay and/or attrition?
+    -   For those who do not finish how many training levels do they typically complete?
+
+## New registrations: a leading indicator
+
+-   We apply historic transition probabilities to the stream of new apprenticeship registrations.
+
+-   We derive these transition probabilities based on Kaplan-Meier (non-parametric) estimation of historic survival data.
+
+-   The main assumption is that these transition dynamics are stable over time
+
+-   ... likely to fail if government policy changes in a *meaningful* way.
+
+## In other words, we assume...
+
+-   The arrival rate of new registrants is **the** constraint on the "production" of Journeypersons.
+
+-   "Production" scales up/down with the arrival rate of registrants, without changes in attrition or delay.
+
+![](factory.webp)
+
+## How wrong is the assumption?
+
+-  Doubling cohort size $\sim$ completion rate decreases by 1.3%.
+-  Doubling cohort size $\sim$ duration increases by 3.6 months.
 
 
-tbbl|>
-  ggplot(aes(dates, `Apprentice Completions`, colour="Apprentice Completions"))+
-  geom_hline(yintercept = 50, colour="white", lwd=1.25)+
-  geom_line()+
-  labs(x=NULL, y=NULL, colour=NULL)+
-  scale_y_continuous(limits = c(0,200), breaks = seq(0,200,25))+ 
-  theme(text=element_text(size=20))+
-  annotate("rect", xmin = today(), xmax = today()+months(24),
-           ymin = -Inf, ymax = Inf, alpha = 1, fill="grey90")+
-  geom_text(aes(x = today()+months(12), y = 100, label = "?"), colour="black", size = 10) 
-```
+```{r, results='asis'}
+prop_complete_mod <- lm(prop_complete~log(`cohort size`)+ `mean unemployment rate subsequent 4 years`, data=congestion)
+mean_delay_mod <- lm(mean_delay~log(`cohort size`)+`mean unemployment rate subsequent 4 years`, data=congestion)
+models=list("Proportion that complete"=prop_complete_mod, 
+            "Apprenticeship Duration"=mean_delay_mod)
 
-## Applying this logic to driving would be problematic
-
--   ... unless you live in Saskatchewan.
-
-![](blacked_out.jpg)
-
-## Would observing new apprentice registrations influence your forecast?
-
-```{r, fig.retina=2}
-tbbl|>
-  pivot_longer(cols=-dates)|>
-  ggplot(aes(dates, value, colour=name))+
-  geom_line()+
-  labs(x=NULL, y=NULL, colour=NULL)+
-  scale_y_continuous(limits = c(0,200), breaks = seq(0,200,25))+ 
-  theme(text=element_text(size=20))+
-  annotate("rect", xmin = today()-months(24), xmax = today()+months(24),
-           ymin = -Inf, ymax = Inf, alpha = 1, fill="grey90")+
-  geom_text(aes(x = today(), y = 100, label = "?"), colour="black", size = 10) 
-```
-
-## Would observing new apprentice registrations influence your forecast?
-
-```{r, fig.retina=2}
-tbbl|>
-  pivot_longer(cols=-dates)|>
-  ggplot(aes(dates, value, colour=name))+
-  geom_line()+
-  labs(x=NULL, y=NULL, colour=NULL)+
-  scale_y_continuous(limits = c(0,200), breaks = seq(0,200,25))+ 
-  theme(text=element_text(size=20))+
-  annotate("rect", xmin = today(), xmax = today()+months(24),
-           ymin = -Inf, ymax = Inf, alpha = 1, fill="grey90")+
-  geom_text(aes(x = today()+months(12), y = 100, label = "?"), colour="black", size = 10) 
-```
-
-## Main assumption:
-
--   The arrival rate of new registrants is **the** constraint on the "production" of journey-persons.
--   i.e. "production" scales up/down with the arrival rate of registrants, without changes in attrition or delay (no congestion effects). 
--   If true,  we can use new registrants as a leading indicator of apprentice completions.
-
-## No real indication of (historic) congestion...
-
--   But there is some policy uncertainty going forward.
-
-```{r, fig.retina=2, fig.height=5}
-plt <- ggplot(mapping=aes(completion_cor, 
-                              delay_cor, 
-                              text=paste0(
-                                trade_desc,
-                                "\n Probability of completion cor: ",
-                                round(completion_cor,2), 
-                                "\n Time to completion cor: ",
-                                round(delay_cor,2)
-                                )
-                              )
-              )+
-  geom_vline(xintercept = 0, colour="white", lwd=1.5)+
-  geom_hline(yintercept = 0, colour="white", lwd=1.5)+
-  geom_point(data=congestion|>filter(completion_cor < -.5, delay_cor > .5), colour="red", size = 3)+
-  geom_point(data=congestion)+
-  labs(x="cor(cohort size, probability of completion)",
-       y="cor(cohort size, time to completion")+
-  scale_x_continuous(limits=c(-1,1))+
-  scale_y_continuous(limits=c(-1,1))
-  
- plotly::ggplotly(plt, tooltip = "text")|>
-  plotly::layout(
-    title = list(
-      text = "Does cohort size affect measures of completion?<br><sub>If congestion a problem, we would expect cohort size to be - related to probability of completion, + related to time to completion.</sub>",
-      x = 0.5,
-      xanchor = 'center',
-      y = 1.1,
-      yanchor = 'bottom'
-  ),
-  margin = list(t = 100)  # Add margin to prevent overlap
-)
+stars <- c(`***` = 0.001, `**` = 0.01, `*` = 0.05, ` ` = 0.1)
+table <- modelsummary(models, output = "gt", 
+             statistic = "p.value", 
+             stars=stars,
+             gof_map = c("nobs", "r.squared", "adj.r.squared"))
+table <- table %>%
+  tab_style(
+    style = list(
+      cell_fill(color = "grey95")
+    ),
+    locations = cells_body(rows = 3, columns = 1:3)
+  )
+table%>%
+  tab_options(table.font.size = 16) %>%
+  as_raw_html() %>%
+  cat()
 ```
 
 ## A simple forecast based on registrations:
@@ -179,6 +143,7 @@ p <- ggplot(tbbl)+
   geom_point(aes(simple_date, simple_completions))+
   labs(x=NULL, y=NULL, colour=NULL, title="New Registrations and Completions")+
   scale_colour_manual(values=colors)+
+  theme(text=element_text(size=18))+
   annotate("segment", 
            x = reg_date[time], 
            xend = reg_date[time], 
@@ -207,14 +172,14 @@ animate(p, renderer = gifski_renderer())
 
 ```
 
-
 ## Simple vs. slightly more realistic transistion probabilities.
 
 ```{r}
 simple <- tibble(`completion time`="48 months", `probability of completion`=.5)
 simple_plt <- ggplot(simple, aes(`completion time`, `probability of completion`))+
   geom_col(width = .05)+
-  labs(title="50% completion rate, all at 48 months")
+  theme(text=element_text(size=18))+
+  labs(title="50% completion at 48 months")
 
 real <- tibble(`completion time (months)`=36:60,
                    x=seq(-3,3, length=length(`completion time (months)`)),
@@ -222,7 +187,8 @@ real <- tibble(`completion time (months)`=36:60,
                    
 real_plt <- ggplot(real, aes(`completion time (months)`, `probability of completion`))+
   geom_col()+
-  labs(title="50% completion rate, centered at 48 months.")
+  theme(text=element_text(size=18))+
+  labs(title="50% completion, spread out")
 
 simple_plt+real_plt
 ```
@@ -257,6 +223,7 @@ p <- ggplot(more_realistic)+
   geom_point(aes(real_date, real_completions, colour="More realistic forecast of completions"))+
   labs(x=NULL, y=NULL, title="New Registrations and Completions")+
   scale_colour_manual(values=colors)+ 
+  theme(text=element_text(size=18))+
   transition_reveal(time)
 
 animate(p, renderer = gifski_renderer())
@@ -265,12 +232,12 @@ animate(p, renderer = gifski_renderer())
 ## Estimation:
 
 -   We use Kaplan-Meier and historical completion data to estimate, rather than assume, the transition probabilities.
--   The transition probabilities are the joint probability of "survival thus far" (not yet a journey-person) and the instantaneous probability of "death" (graduation).
+-   The transition probabilities are the joint probability of "survival thus far" (not yet a Journeyperson) and the instantaneous probability of "death" (graduation).
 
-1)  Survival Curve: the probability of "survival thus far". 
+1)  Survival Curve: the probability of "survival thus far".
 2)  Hazard Rate: the instantaneous probability of "death", conditional on survival thus far.
 
-##
+## 
 
 ```{r, fig.height=8, fig.retina=2}
 #| layout-ncol: 2
@@ -286,11 +253,10 @@ joint <- survival|>
 
 ggplot(joint[[1]], aes(time, joint))+
   geom_col()+
+  theme(text=element_text(size=25))+
   labs(x="Months since registration",
        y="Probability of completion",
-       title="Transition Probabilities")+
-  theme(text=element_text(size=font_size))
-
+       title="Transition Probabilities")
 ```
 
 ## 
@@ -312,7 +278,7 @@ ggplot(joint[[1]], aes(time, joint))+
   labs(x="Months since registration",
        y="Probability of completion",
        title="Transition Probabilities")+
-  theme(text=element_text(size=font_size))
+  theme(text=element_text(size=25))
 
 ```
 
@@ -335,7 +301,13 @@ plt$km_plot[[1]]
 -   Yes: we can be more confident in forecasts.
 -   No: are we doing better or worse over time?
 
-##  The App:
+## The Apps:
 
+-   Forecasting completions
+-   Inside the black box
 
+## Potential co-op opportunities
 
+-   BC Public Service Co-op Employment Program: [internship-co-op opportunities](https://www2.gov.bc.ca/gov/content/careers-myhr/job-seekers/internship-co-op-opportunities/co-op)
+-   Check your Co-op & Career Services 
+-   Check my colleague's LinkedIn profile: [Sazid Hasan](https://www.linkedin.com/in/sazidhasan/)

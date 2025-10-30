@@ -44,25 +44,6 @@ get_trade_counts <- function(the_trade){
     summarize(number_of_trades=n())|>
     tabyl(number_of_trades)
 }
-get_cor <- function(tbbl, var){
-  #' A wrapper for calculating the correlation between cohort size and measures of performance.
-  with(tbbl, cor(cohort_size, get(var), use = "pairwise.complete.obs"))
-}
-get_stats <- function(tbbl){
-  #' Calculates cohort size, the proportion of registrants who completed, and the mean interval length
-  #' between date of registration and date of completion.
-  size_and_prop <- tbbl|>
-    group_by(floor_date(ym(start_date), unit="year"))|>
-    summarize(cohort_size=n(),
-              prop_complete=sum(completed)/n()
-    )
-  delay <- tbbl|>
-    filter(completed==1)|>
-    group_by(floor_date(ym(start_date), unit="year"))|>
-    summarise(mean_delay=mean(time, na.rm = TRUE))
-#  browser()
-  full_join(size_and_prop, delay)
-}
 
 complete_wrapper <- function(surv_dat, at_risk) {
   #this function applies the joint probability of completion to the stream of at_risk (historical+forecast new_regs)
@@ -274,6 +255,11 @@ ets_fcast <- ets_fit |>
 at_risk <- ets_fcast |>
   tibble()|>
   select(start_date, trade_desc, new_regs = .mean)|>
+  group_by(trade_desc)|>
+  mutate(mean_new_regs=mean(new_regs))|>
+  mutate(new_regs=if_else(mean_new_regs<0, 0, new_regs))|> #if the mean of the forecast is negative, make 0
+  select(-mean_new_regs)|>
+  ungroup()|>
   bind_rows(observed_at_risk)|>
   filter(start_date<=yearmonth(paste(fcast_end,"/12")))|> #trims the ets_fcast down to LMO forecast horizon.
   nest(at_risk_data=c(start_date, new_regs))
@@ -294,6 +280,8 @@ forecasts <- f_and_b_cast|>
   filter(complete_date>max(reg_and_complete$start_date))|>
   rename(value=expected_complete,
          date=complete_date)
+
+write_rds(forecasts, here("out", "forecasts.rds"))
 
 actual_plus_forecast <- observed_complete|>
   semi_join(ets_fit|>tibble()|>select(trade_desc))|> #only the series we fit models to
@@ -441,15 +429,25 @@ full_join(new_reg_forecast, demand)|>
 
 # are there congestion effects?
 
-reg_and_complete|>
-  filter(ym(start_date)<floor_date(today()-years(5), unit = "year"))|> #gives a reasonable amount of time to complete.
-  group_by(trade_desc)|>
-  nest()|>
-  mutate(stats=map(data, get_stats))|>
-  mutate(completion_cor=map_dbl(stats, get_cor, "prop_complete"),
-         delay_cor=map_dbl(stats, get_cor, "mean_delay")
-  )|>
-  select(-data, -stats)|>
+urate <- read_csv(here("data","urate.csv"), skip = 14, n_max = 24)|>
+  mutate(`mean unemployment rate subsequent 4 years`=zoo::rollmean(urate, k=4, align="left", na.pad = TRUE))|>#mean u rate over 4 years following registration
+  select(-urate)
+
+prop_complete  <- reg_and_complete|>
+  filter(ym(start_date)<floor_date(today()-years(5), unit = "year"))|>
+  group_by(trade_desc, year=year(floor_date(ym(start_date), unit="year")))|>
+  summarize(`cohort size`=n(),
+            prop_complete=sum(completed)/n()
+  )
+
+mean_delay <- reg_and_complete|>
+  filter(completed==1)|>
+  group_by(trade_desc, year=year(floor_date(ym(start_date), unit="year")))|>
+  summarise(mean_delay=mean(time, na.rm = TRUE))
+
+full_join(prop_complete, mean_delay)|>
+  left_join(urate)|>
+  na.omit()|>
   write_rds(here("out", "congestion.rds"))
 
 
