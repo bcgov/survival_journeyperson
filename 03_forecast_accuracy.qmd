@@ -1,0 +1,263 @@
+---
+title: "Survival vs. Traditional Forecasts of Apprentice Completions"
+author: "Richard Martin"
+date: today
+format: 
+  html:
+    code-fold: true
+    self-contained: true
+    page-layout: full
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+message = FALSE, # suppress messages
+warning = FALSE # suppress warnings
+)
+library(data.table)
+library(tidyverse)
+library(here)
+library(fpp3)
+library(janitor)
+library(readxl)
+library(conflicted)
+library(slider)
+conflicts_prefer(dplyr::filter)
+get_accuracy <- function(tbbl, truth_col, estimate_col, model_name) {
+  tbbl |>
+    mutate(metrics = map(data, \(x) yardstick::metrics(x, truth = {{ truth_col }}, estimate = {{ estimate_col }}))) |>
+    select(-data) |>
+    unnest(metrics) |>
+    select(-.estimator) |>
+    mutate(model = model_name)
+}
+get_phrase_vecs <- function(phrases, emb_mat) {
+  mat <- matrix(0, nrow = length(phrases), ncol = ncol(emb_mat))
+  for (i in seq_along(phrases)) {
+    phrase_lower <- tolower(phrases[i])
+    if (phrase_lower %in% rownames(emb_mat)) {
+      mat[i, ] <- emb_mat[phrase_lower, ]
+    } else {
+      phrase_clean <- gsub("[-/()]", " ", phrase_lower)
+      words <- strsplit(phrase_clean, "\\s+")[[1]]
+      words <- gsub("[^a-z]", "", words)
+      words <- words[words != ""]
+      words <- words[words %in% rownames(emb_mat)]
+      if (length(words) > 0) mat[i, ] <- colMeans(emb_mat[words, , drop = FALSE])
+    }
+  }
+  norms <- sqrt(rowSums(mat^2))
+  norms[norms == 0] <- 1
+  mat / norms
+}
+semantic_leftjoin <- function(x, y, by_x, by_y, emb_dt, threshold) {
+  x_vec <- as.character(unlist(x[[by_x]]))
+  y_vec <- as.character(unlist(y[[by_y]]))
+  exact_idx <- match(tolower(x_vec), tolower(y_vec))
+  temp_y <- paste0(by_y, "_y")
+  y_temp <- y
+  names(y_temp)[names(y_temp) == by_y] <- temp_y
+  exact_matches <- tibble::tibble(
+    !!by_x := x_vec[!is.na(exact_idx)],
+    !!temp_y := y_vec[exact_idx[!is.na(exact_idx)]],
+    similarity = 1,
+    .name_repair = "minimal"
+  )
+  exact_matches_full <- dplyr::left_join(exact_matches, x, by = setNames(by_x, by_x)) %>%
+    dplyr::left_join(y_temp, by = setNames(temp_y, temp_y)) %>%
+    dplyr::mutate(match_type = "exact")
+  x_remaining <- x[is.na(exact_idx), , drop = FALSE]
+  y_remaining <- y[!y_vec %in% exact_matches[[temp_y]], , drop = FALSE]
+  if (nrow(x_remaining) == 0 || nrow(y_remaining) == 0) return(exact_matches_full)
+  all_text <- c(as.character(x_remaining[[by_x]]), as.character(y_remaining[[by_y]]))
+  words_needed <- unique(tolower(unlist(strsplit(all_text, "\\s+"))))
+  words_needed <- gsub("[^a-z]", "", words_needed)
+  words_needed <- words_needed[words_needed != ""]
+  emb_sub <- emb_dt[word %in% words_needed]
+  if (nrow(emb_sub) == 0) stop("No matching words found in embeddings")
+  emb_mat <- as.matrix(emb_sub[, -1, with = FALSE])
+  rownames(emb_mat) <- emb_sub$word
+  x_mat <- get_phrase_vecs(as.character(x_remaining[[by_x]]), emb_mat)
+  y_mat <- get_phrase_vecs(as.character(y_remaining[[by_y]]), emb_mat)
+  sim_matrix <- x_mat %*% t(y_mat)
+  top_idx <- max.col(sim_matrix, ties.method = "first")
+  top_sim <- sim_matrix[cbind(seq_len(nrow(sim_matrix)), top_idx)]
+  semantic_matches <- tibble::tibble(
+    !!by_x := x_remaining[[by_x]],
+    !!temp_y := ifelse(top_sim >= threshold, y_remaining[[by_y]][top_idx], NA_character_),
+    similarity = ifelse(top_sim >= threshold, top_sim, NA_real_),
+    .name_repair = "minimal"
+  )
+  y_remaining_temp <- y_remaining
+  names(y_remaining_temp)[names(y_remaining_temp) == by_y] <- temp_y
+  semantic_matches_full <- dplyr::left_join(semantic_matches, x_remaining, by = setNames(by_x, by_x)) %>%
+    dplyr::left_join(y_remaining_temp, by = setNames(temp_y, temp_y)) %>%
+    dplyr::mutate(match_type = ifelse(!is.na(.data[[temp_y]]), "semantic", "unmatched"))
+  bind_rows(exact_matches_full, semantic_matches_full) %>%
+    dplyr::arrange(desc(similarity))
+}
+```
+
+## TL;DR
+
+Our survival based forecasting method has a similar level of accuracy as a composite of forecasts that only uses historical completions to forecast future completions.  If anything, the composite forecast might perform slightly better, and it is much easier to perform (no survival analysis on micro data necessary).
+
+## Read in the data:
+
+Skilled Trades BC decided to change the naming of their trades, which makes comparing pre change forecasts with post change observed values a bit tricky.  We make use of a function `semantic_leftjoin` which performs exact matches first, removes the exact matches from consideration, then matches the remaining names on the basis of meanings (semantics).  In order to do that, we need textual data from the file "cc.en.300.vec".
+
+```{r}
+emb_dt <- fread(
+  input = here("data", "cc.en.300.vec"),
+  quote = "",
+  skip = 1,
+  header = FALSE,
+  data.table = TRUE,
+  encoding = "UTF-8"
+)
+setnames(emb_dt, c("word", paste0("V", 1:(ncol(emb_dt)-1))))
+```
+
+Next we load the historical/training data and survival based forecasts.
+
+```{r}
+training_plus_forecast <- read_rds(here("out","actual_plus_forecast.rds"))|>
+  select(-plot)|>
+  unnest(cols = c(data))|>
+  mutate(date=ym(date))
+```
+
+We then separate out the training data, and get the forecast start date.
+
+```{r}
+training <- training_plus_forecast|>
+  filter(series=="observed")|>
+  select(-series)|>
+  mutate(date=yearmonth(date))|>
+  ungroup()|>
+  as_tsibble(key=trade_desc, index=date)
+
+forecast_start <- min(training_plus_forecast$date[training_plus_forecast$series=="forecast"])
+```
+
+We are going to compare the survival based forecasts (and an alternative composite forecast) to what actually happend (the test set).
+
+```{r}
+test_set <-  read_excel(here("data","CofQ_Apprenticeship_Challenge_Sep_2025.xlsx"))|>
+  clean_names()|>
+  mutate(month=str_sub(cof_q_calendar_month, 1,2), .before=cof_q_calendar_month,
+         date=ym(paste(cof_q_year, month, sep="-"))
+         )|>
+  filter(date>=forecast_start)|>
+  group_by(date, trade_desc=trade)|>
+  summarize(test_set=sum(count))
+```
+
+Zero completions are implicitly missing in the data.  We need to create a full grid of dates and trades and then join with the test data to make the missing values explicit, and then convert the missing values to zeros. 
+
+
+```{r}
+##test set is missing zeros----------------------------------------
+date <-seq(min(test_set$date), max(test_set$date), by="month")
+trade_desc <- unique(test_set$trade_desc)
+full_grid <- crossing(date, trade_desc)
+test_set <- left_join(full_grid, test_set)|>
+  mutate(test_set = replace_na(test_set, 0))|>
+  group_by(trade_desc)|>
+  nest()|>
+  rename(test_data=data)
+```
+
+## Alternative Composite Forecast
+
+So what we have here is count data, where for some of the series the counts are quite low.  ETS and ARIMA can be used to forecast the series if we transform (either log or sqrt) the counts to stabilize the variance.  Back transformation is automatically taken care of by the forecast function. Finally, we create a composite alternative forecast by averaging over the four alternative forecasts.  
+
+
+```{r, cache=TRUE}
+alternative_forecast <- training|>
+  model(
+    log_ets=ETS(log(value+1)),
+    sqrt_ets=ETS(sqrt(value)),
+    log_arima=ARIMA(log(value+1)),
+    sqrt_arima=ARIMA(sqrt(value)))|>
+  fabletools::forecast(h = length(date))|>
+  as_tibble()|>
+  select(-value)|>
+  group_by(trade_desc, date)|>
+  summarize(composite=mean(.mean))
+```
+
+## Join the data
+
+We use function `semantic_leftjoin` to join dataframes `training_plus_forecast` with the observed completions (`test_set`), drop any unmatched trades, join the nested dataframes found in columns `data` and `test_data`, unnest the joined dataframe, and then join in the alternative forecast.
+
+```{r}
+joined <- training_plus_forecast|>
+  group_by(trade_desc)|>
+  nest()|>
+  semantic_leftjoin(test_set,
+                    "trade_desc",
+                    "trade_desc",
+                    emb_dt,
+                    .666)|>
+  filter(match_type!="unmatched")|>
+  mutate(joined_data=map2(data, test_data, inner_join))|>
+  select(trade_desc, joined_data)|>
+  unnest("joined_data")|>
+  rename(survival_based=value)|>
+  select(-series)|>
+  inner_join(alternative_forecast)|>
+  group_by(trade_desc)|>
+  nest()
+```
+
+## Assess and Compare Accuracy
+
+Given the low counts, we only consider two (scale-dependent) measures of accuracy:
+
+* Root Mean Squared Error
+* Mean Absolute Error.
+
+Scale independent measures of relative error tend to blow up when the test set values are close to zero.  Once we have our measures of accuracy, we perform non-parametric paired (by trade) sign tests, and discover there is not much difference between the survival based forecast accuracy and the alternative forecast accuracy.  
+
+```{r}
+composite_accuracy <- get_accuracy(joined, test_set, composite, "composite")
+survival_accuracy <-  get_accuracy(joined, test_set, survival_based, "survival")
+
+accuracy <- bind_rows(composite_accuracy,
+                      survival_accuracy)|>
+  filter(.metric!="rsq")|>
+  pivot_wider(names_from = "model", values_from = ".estimate")
+
+rmse_diffs <- accuracy$composite[accuracy$.metric=="rmse"]-accuracy$survival[accuracy$.metric=="rmse"]
+mae_diffs <- accuracy$composite[accuracy$.metric=="mae"]-accuracy$survival[accuracy$.metric=="mae"]
+
+rmse_compare <- BSDA::SIGN.test(rmse_diffs, md = 0, alternative = "two.sided") 
+mae_compare <- BSDA::SIGN.test(mae_diffs, md = 0, alternative = "two.sided") 
+
+```
+
+## Visualize Differences in Accuracy
+
+What you see below is a visual representation of the difference in accuracy between the survival based forecast and the alternative composite forecast (which only makes use of historical completion data).  The fact that the points lie along the 45 degree line is what suggests the models are similar in terms of their accuracy.  The fact that when points do stray from the 45 they tend to be above is what suggests that if there is an edge in forecast accuracy, it goes to the composite model based solely on historic completions.
+
+I think what is going on here is that apprentice completions are quite difficult to forecast.  When the number of individuals in an apprenticeship program is very low, aggregation does little to reduce the effect of idiosyncratic choice (noise dominates signal).  In conclusion, given the data both forecasting methods suck, and they both suck to a similar extent.
+
+```{r, fig.width=12, fig.height=10}
+plt <- ggplot(data=accuracy,
+       mapping=aes(composite,
+                   survival,
+                   label=trade_desc))+
+  geom_abline(slope = 1, intercept = 0, colour="white", lwd=2)+
+  geom_point(alpha=.5)+
+  scale_x_continuous(trans="log10")+
+  scale_y_continuous(trans="log10")+
+  facet_wrap(~.metric, labeller = as_labeller(c(
+    "mae" = paste("Mean Absolute Error: sign test p-value",round(mae_compare$p.value, 3), sep="="),
+    "rmse" = paste("Root Mean Squared Error: sign test p-value", round(rmse_compare$p.value, 3), sep="="))))+
+  labs(title="Not a lot of daylight between accuracy of Survival based forecast vs. composite forecast",
+       x="Composite Forecast Error",
+       y="Survival Based Forecast Error")
+
+plotly::ggplotly(plt)
+```

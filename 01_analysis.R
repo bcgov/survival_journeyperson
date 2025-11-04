@@ -187,7 +187,8 @@ observed_complete <- reg_and_complete |>
   as_tsibble(key=trade_desc, index = end_date)|>
   tsibble::fill_gaps(observed_complete=0, .full=TRUE)|> #make implicit missing explicit zeros
   as_tibble()|>
-  arrange(trade_desc, end_date)
+  arrange(trade_desc, end_date)|>
+  mutate(series="observed")
 # do the survival analysis--------------------------
 survival <- reg_and_complete |>
   mutate(era=case_when(start_date<yearmonth(ym(min(start_date))+years(8))~"first 8 years",
@@ -279,9 +280,8 @@ f_and_b_cast <- survival |>
 forecasts <- f_and_b_cast|>
   filter(complete_date>max(reg_and_complete$start_date))|>
   rename(value=expected_complete,
-         date=complete_date)
-
-write_rds(forecasts, here("out", "forecasts.rds"))
+         date=complete_date)|>
+  mutate(series="forecast")
 
 actual_plus_forecast <- observed_complete|>
   semi_join(ets_fit|>tibble()|>select(trade_desc))|> #only the series we fit models to
@@ -337,7 +337,6 @@ at_risk|>
   write_rds(here("out","at_risk.rds"))
 
 actual_plus_forecast|>
-  select(-data)|>
   write_rds(here("out","actual_plus_forecast.rds"))
 
 by_trade_completions <- actual_plus_forecast|>
